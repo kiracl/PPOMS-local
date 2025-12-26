@@ -1,0 +1,41 @@
+# Python bytecode and caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Build and distribution artifacts (PyInstaller)
+project/build/
+project/dist/
+
+# Test caches
+project/tests/__pycache__/
+
+# Database files and backups
+project/purchase.db
+project/backups/
+project/release_*/backups/
+project/release_*/purchase.db
+project/release_*/**/*.db
+*.db
+
+# Executables and packaged binaries
+*.exe
+project/release_*/**/*.exe
+
+# Temporary/backup files
+*.un~
+*.tmp
+*.bak
+
+# OS/IDE files
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+
+# PyInstaller intermediate files
+*.spec.un~

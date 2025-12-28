@@ -296,6 +296,20 @@ def _migrate_schema(conn: sqlite3.Connection):
     cur = conn.cursor()
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS operation_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_number TEXT,
+            field TEXT,
+            old_value TEXT,
+            new_value TEXT,
+            operator TEXT,
+            op_time TEXT
+        )
+        """
+    )
+    conn.commit()
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS monthly_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plan_month TEXT,
@@ -378,6 +392,8 @@ def _migrate_schema(conn: sqlite3.Connection):
     cols = [r[1] for r in cur.fetchall()]
     if "task_name" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN task_name TEXT")
+    if "approval_doc" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN approval_doc TEXT")
     conn.commit()
     cur.execute(
         """
@@ -689,7 +705,7 @@ def fetch_orders(number_filter=None, task_filter=None, unit_filter=None, month_f
     conn = _connect()
     try:
         cur = conn.cursor()
-        sql = "SELECT yymm, category, unit, date, task_name, number FROM orders WHERE 1=1"
+        sql = "SELECT yymm, category, unit, date, task_name, number, approval_doc FROM orders WHERE 1=1"
         params = []
         if number_filter:
             sql += " AND number LIKE ?"
@@ -734,10 +750,46 @@ def update_order_date(number: str, date_str: str) -> bool:
         conn.close()
 
 
+def update_approval_doc(number: str, doc_info: str) -> bool:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE orders SET approval_doc=? WHERE number=?", (doc_info, number))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_approval_doc(number: str) -> str:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT approval_doc FROM orders WHERE number=?", (number,))
+        row = cur.fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
+
+
+
 def save_operation_log(order_number: str, field: str, old_value: str, new_value: str, operator: str, op_time: str):
     conn = _connect()
     try:
         cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_number TEXT,
+                field TEXT,
+                old_value TEXT,
+                new_value TEXT,
+                operator TEXT,
+                op_time TEXT
+            )
+            """
+        )
         cur.execute(
             "INSERT INTO operation_logs(order_number, field, old_value, new_value, operator, op_time) VALUES(?,?,?,?,?,?)",
             (order_number, field, old_value or "", new_value or "", operator or "", op_time),

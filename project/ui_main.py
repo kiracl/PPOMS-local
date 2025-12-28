@@ -145,7 +145,7 @@ class MainForm(QWidget):
 
         splitter.addWidget(top)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels([
             "日期",
             "主单编号",
@@ -156,6 +156,7 @@ class MainForm(QWidget):
             "采购金额(元)",
             "记录条数",
             "处理状态",
+            "审批单据",
         ])
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)

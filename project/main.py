@@ -1,6 +1,11 @@
 import sys
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTableWidgetItem, QStackedWidget, QWidget, QHBoxLayout, QVBoxLayout, QListWidget
-from PySide6.QtCore import QDate, Qt, QSize
+import os
+import shutil
+import time
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTableWidgetItem, QStackedWidget, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QFileDialog
+from PySide6.QtCore import QDate, Qt, QSize, QUrl
+from PySide6.QtGui import QDesktopServices
+
 
 from ui_main import MainForm, SettingsDialog, EditOrderDialog
 from ui_detail import DetailWidget
@@ -17,7 +22,7 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购计划管理系统       生产管理部 蔡勒 V1.9.0808")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.0.0008")
         
         # Main Container
         container = QWidget()
@@ -110,6 +115,7 @@ class MainWindow(QMainWindow):
         self.form.button_generate.clicked.connect(self.generate_order)
         self.form.btn_search.clicked.connect(self.search_orders)
         self.form.table.cellDoubleClicked.connect(self.open_detail_from_table)
+        self.form.table.cellClicked.connect(self.on_table_cell_clicked)
         self.form.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.form.table.customContextMenuRequested.connect(self.show_context_menu)
         menu = self.menuBar().addMenu("设置")
@@ -146,19 +152,47 @@ class MainWindow(QMainWindow):
         elif index == 6:
             self.data_manager.load_backups()
 
+    def get_display_name(self, path):
+        if not path:
+            return ""
+        filename = os.path.basename(path)
+        # Format: {number}_{safe_name}_{timestamp}.pdf
+        # Goal: extract safe_name, removing .pdf if present
+        
+        if not filename.lower().endswith('.pdf'):
+            return filename
+            
+        # Remove .pdf extension
+        base = filename[:-4]
+        
+        # Find separators
+        first_us = base.find('_')
+        last_us = base.rfind('_')
+        
+        if first_us != -1 and last_us != -1 and first_us < last_us:
+            # Extract middle part
+            name_part = base[first_us+1 : last_us]
+            # Remove embedded .pdf if present (from old files)
+            if name_part.lower().endswith('.pdf'):
+                name_part = name_part[:-4]
+            return name_part
+            
+        return base
+
     def load_history(self, number_filter=None, task_filter=None, unit_filter=None, month_filter=None):
         rows = database.fetch_orders(number_filter, task_filter, unit_filter, month_filter)
         self.form.table.setRowCount(0)
         for r in rows:
             rr = self.form.table.rowCount()
             self.form.table.insertRow(rr)
-            # r: yymm, category, unit, date, task_name, number
+            # r: yymm, category, unit, date, task_name, number, approval_doc
             yymm = r[0]
             category_code = r[1]
             unit = r[2]
             date_str = r[3]
             task_name = r[4]
             number = r[5]
+            approval_doc = r[6] if len(r) > 6 else ""
             
             category = database.category_display_from_code(category_code)
             count = database.count_details(number)
@@ -169,8 +203,24 @@ class MainWindow(QMainWindow):
                 return str(v) if v is not None else ""
                 
             status = database.get_order_processing_status(number)
-            for c, val in enumerate([date_str, number, task_name, unit, category, yymm, f"{total_inquiry:,.2f}", count, status]):
+            
+            doc_display = self.get_display_name(approval_doc) if approval_doc else "点击上传"
+            
+            vals = [date_str, number, task_name, unit, category, yymm, f"{total_inquiry:,.2f}", count, status]
+            for c, val in enumerate(vals):
                 self.form.table.setItem(rr, c, QTableWidgetItem(safe_str(val)))
+            
+            # Column 9: Approval Doc
+            item_doc = QTableWidgetItem(doc_display)
+            item_doc.setTextAlignment(Qt.AlignCenter)
+            if approval_doc:
+                item_doc.setForeground(Qt.blue)
+                item_doc.setToolTip(f"已上传: {doc_display}\n点击打开，右键可替换")
+            else:
+                item_doc.setForeground(Qt.gray)
+                item_doc.setToolTip("点击上传审批单据PDF")
+            self.form.table.setItem(rr, 9, item_doc)
+
 
     def search_orders(self):
         number = self.form.search_number.text().strip()
@@ -202,6 +252,13 @@ class MainWindow(QMainWindow):
         # 新增订单时，金额和记录条数都为0
         for c, val in enumerate([date_str, number, task_name, unit, cat_name, yymm, "0.00", 0, "未发放"]):
             self.form.table.setItem(rr, c, QTableWidgetItem(str(val)))
+        
+        item_doc = QTableWidgetItem("点击上传")
+        item_doc.setForeground(Qt.gray)
+        item_doc.setTextAlignment(Qt.AlignCenter)
+        item_doc.setToolTip("点击上传审批单据PDF")
+        self.form.table.setItem(rr, 9, item_doc)
+        
         QMessageBox.information(self, "生成", f"主单已生成: {number}")
 
     def open_detail_from_table(self, row, column):
@@ -413,6 +470,122 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "未更新", "未找到对应记录或数据未变化")
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"更新失败: {str(e)}")
+
+
+    def on_table_cell_clicked(self, row, col):
+        if col == 9: # Approval Doc
+            num_item = self.form.table.item(row, 1)
+            if not num_item: return
+            number = num_item.text()
+            
+            # Check if file exists
+            path = database.get_approval_doc(number)
+            
+            # 路径自适应：如果记录的路径不存在，尝试在当前exe所在目录的"审批单据"文件夹下查找
+            final_path = path
+            if path and not os.path.exists(path):
+                if getattr(sys, "frozen", False):
+                    app_dir = os.path.dirname(sys.executable)
+                else:
+                    app_dir = os.path.dirname(os.path.abspath(__file__))
+                
+                local_candidate = os.path.join(app_dir, "审批单据", os.path.basename(path))
+                if os.path.exists(local_candidate):
+                    final_path = local_candidate
+            
+            if final_path and os.path.exists(final_path):
+                self.handle_approval_doc_click(number, final_path)
+            else:
+                self.upload_approval_doc(number)
+
+    def handle_approval_doc_click(self, number, path):
+        box = QMessageBox(self)
+        box.setWindowTitle("审批单据操作")
+        box.setText(f"单号 {number} 已关联文件：\n{os.path.basename(path)}")
+        btn_open = box.addButton("打开文件", QMessageBox.AcceptRole)
+        btn_upload = box.addButton("重新上传", QMessageBox.ActionRole)
+        btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        
+        if box.clickedButton() == btn_open:
+            self.open_approval_doc(path)
+        elif box.clickedButton() == btn_upload:
+            self.upload_approval_doc(number)
+
+    def upload_approval_doc(self, number):
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择审批单据PDF", "", "PDF Files (*.pdf)")
+        if not file_path:
+            return
+            
+        # Check size < 10MB
+        try:
+            size = os.path.getsize(file_path)
+            if size > 10 * 1024 * 1024:
+                QMessageBox.warning(self, "文件过大", "文件大小超过10MB限制")
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法读取文件: {e}")
+            return
+            
+        if getattr(sys, "frozen", False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+        target_dir = os.path.join(base_dir, "审批单据")
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+            
+        original_name = os.path.basename(file_path)
+        # Simple sanitize
+        name_root, _ = os.path.splitext(original_name)
+        safe_name = "".join(c for c in name_root if c.isalnum() or c in "._- ").strip()
+        if not safe_name: safe_name = "doc"
+        
+        timestamp = int(time.time())
+        new_name = f"{number}_{safe_name}_{timestamp}.pdf"
+        target_path = os.path.join(target_dir, new_name)
+        
+        try:
+            shutil.copy2(file_path, target_path)
+            
+            if database.update_approval_doc(number, target_path):
+                # 优先更新界面，避免日志记录失败导致界面不刷新
+                self.refresh_row_approval_doc(number, target_path)
+                
+                try:
+                    try:
+                        operator = os.getlogin()
+                    except:
+                        operator = os.environ.get('USERNAME', 'User')
+                    from datetime import datetime
+                    database.save_operation_log(number, "approval_doc", "", new_name, operator, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception as log_e:
+                    print(f"日志记录失败: {log_e}")
+                
+                QMessageBox.information(self, "成功", "上传成功")
+            else:
+                QMessageBox.critical(self, "失败", "数据库更新失败")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"上传失败: {e}")
+
+    def open_approval_doc(self, path):
+        try:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        except Exception as e:
+             QMessageBox.critical(self, "错误", f"无法打开文件: {e}")
+
+    def refresh_row_approval_doc(self, number, path):
+        for r in range(self.form.table.rowCount()):
+            it = self.form.table.item(r, 1)
+            if it and it.text() == number:
+                display = self.get_display_name(path)
+                item = self.form.table.item(r, 9)
+                item.setText(display)
+                item.setForeground(Qt.blue)
+                item.setToolTip(f"已上传: {display}\n点击打开，右键可替换")
+                break
 
 
 def main():

@@ -39,3 +39,6 @@ Thumbs.db
 
 # PyInstaller intermediate files
 *.spec.un~
+
+# User uploaded files
+**/审批单据/

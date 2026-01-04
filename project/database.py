@@ -471,6 +471,160 @@ def _migrate_schema(conn: sqlite3.Connection):
         cur.executemany("INSERT INTO plan_months(name) VALUES(?)", [("2601",), ("2602",), ("2603",)])
         conn.commit()
 
+    # --- Inbound Management Tables ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inbound_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inbound_no TEXT UNIQUE NOT NULL,
+            contract_order_id INTEGER,
+            contract_no TEXT,
+            order_no TEXT,
+            purch_plan_no TEXT,
+            spec_model TEXT,
+            order_qty REAL,
+            inbound_qty REAL,
+            warehouse_no TEXT,
+            inbound_date TEXT,
+            operator TEXT,
+            create_time TEXT,
+            remarks TEXT
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inbound_counter (
+            date_str TEXT NOT NULL,
+            category TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (date_str, category)
+        )
+        """
+    )
+    conn.commit()
+
+    # --- Contract Management Tables ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS suppliers (
+            name TEXT PRIMARY KEY
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contract_categories (
+            name TEXT PRIMARY KEY
+        )
+        """
+    )
+    conn.commit()
+    cur.execute("SELECT COUNT(1) FROM contract_categories")
+    if cur.fetchone()[0] == 0:
+        cur.executemany("INSERT INTO contract_categories(name) VALUES(?)", [("模块",), ("脚线",), ("其它",)])
+        conn.commit()
+    
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contract_attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_id INTEGER,
+            file_name TEXT,
+            file_path TEXT,
+            upload_time TEXT,
+            FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+    
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_number TEXT UNIQUE,
+            name TEXT,
+            category TEXT,
+            supplier TEXT,
+            sign_date TEXT,
+            end_date TEXT,
+            amount REAL,
+            status TEXT,
+            attachment TEXT,
+            remarks TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.commit()
+    
+    # Check contracts columns
+    cur.execute("PRAGMA table_info(contracts)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "attachment" not in cols:
+        cur.execute("ALTER TABLE contracts ADD COLUMN attachment TEXT")
+    if "created_at" not in cols:
+        cur.execute("ALTER TABLE contracts ADD COLUMN created_at TEXT")
+    conn.commit()
+    
+    # Check contract_orders columns
+    cur.execute("PRAGMA table_info(contract_orders)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "sales_order" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN sales_order TEXT")
+    if "prod_order" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN prod_order TEXT")
+    if "purch_plan_no" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN purch_plan_no TEXT")
+    if "status" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN status TEXT DEFAULT '新增'")
+    conn.commit()
+    
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contract_specs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_id INTEGER,
+            spec_model TEXT,
+            unit TEXT,
+            quantity REAL,
+            unit_price REAL,
+            total_price REAL,
+            executed_qty REAL,
+            remarks TEXT,
+            FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contract_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_id INTEGER,
+            spec_id INTEGER,
+            order_date TEXT,
+            order_no TEXT,
+            quantity REAL,
+            unit_price REAL,
+            total_price REAL,
+            sales_order TEXT,
+            prod_order TEXT,
+            purch_plan_no TEXT,
+            remarks TEXT,
+            FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+            FOREIGN KEY(spec_id) REFERENCES contract_specs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+
 
 def init_db():
     ensure_db()
@@ -481,23 +635,23 @@ def _connect():
     return sqlite3.connect(DB_PATH)
 
 
-def _get_and_inc(cur: sqlite3.Cursor, table: str, yymm: str, category: str) -> int:
+def _get_and_inc(cur: sqlite3.Cursor, table: str, key_val: str, category: str, key_col: str = "yymm") -> int:
     cur.execute(
-        f"SELECT seq FROM {table} WHERE yymm=? AND category=?",
-        (yymm, category),
+        f"SELECT seq FROM {table} WHERE {key_col}=? AND category=?",
+        (key_val, category),
     )
     row = cur.fetchone()
     if row is None:
         seq = 1
         cur.execute(
-            f"INSERT INTO {table}(yymm, category, seq) VALUES(?, ?, ?)",
-            (yymm, category, seq),
+            f"INSERT INTO {table}({key_col}, category, seq) VALUES(?, ?, ?)",
+            (key_val, category, seq),
         )
     else:
         seq = int(row[0]) + 1
         cur.execute(
-            f"UPDATE {table} SET seq=? WHERE yymm=? AND category=?",
-            (seq, yymm, category),
+            f"UPDATE {table} SET seq=? WHERE {key_col}=? AND category=?",
+            (seq, key_val, category),
         )
     return seq
 
@@ -973,6 +1127,20 @@ def rename_unit(old_name: str, new_name: str) -> bool:
         conn.close()
 
 
+def delete_unit(name: str) -> bool:
+    name = name.strip()
+    if not name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM units WHERE name=?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def get_detail_column_widths():
     conn = _connect()
     try:
@@ -1106,6 +1274,20 @@ def rename_purchaser(old_name: str, new_name: str) -> bool:
     finally:
         conn.close()
 
+
+def delete_purchaser(name: str) -> bool:
+    name = name.strip()
+    if not name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM purchasers WHERE name=?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
 def fetch_purchase_statuses():
     conn = _connect()
     try:
@@ -1143,6 +1325,20 @@ def rename_purchase_status(old_name: str, new_name: str) -> bool:
         if cur.fetchone():
             return False
         cur.execute("UPDATE purchase_status SET name=? WHERE name=?", (new_name, old_name))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_purchase_status(name: str) -> bool:
+    name = name.strip()
+    if not name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM purchase_status WHERE name=?", (name,))
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -1262,6 +1458,610 @@ def fetch_release_details(order_number: str, purchaser: str):
         return rows
     finally:
         conn.close()
+
+
+# --- Inbound Management Functions ---
+
+def inbound_category_code(text: str) -> str:
+    if not text: return "GEN"
+    if "半成品" in text: return "MPB"
+    if "机加" in text: return "MPJ"
+    if "模块" in text: return "MOD"
+    if "脚线" in text: return "LIN"
+    return "OTH"
+
+def get_next_inbound_number(date_str_yymmdd: str, category_text: str) -> str:
+    # date_str_yymmdd: e.g., "260101"
+    # category_text: e.g., "模块" -> "MOD"
+    cat_code = inbound_category_code(category_text)
+    
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        seq = _get_and_inc(cur, "inbound_counter", date_str_yymmdd, cat_code, key_col="date_str")
+        conn.commit()
+        # RK-YYMMDD-CAT-XXXX
+        return f"RK-{date_str_yymmdd}-{cat_code}-{seq:04d}"
+    finally:
+        conn.close()
+
+def _update_contract_order_status(cur, contract_order_id):
+    if not contract_order_id:
+        return
+        
+    # Get order quantity
+    cur.execute("SELECT quantity FROM contract_orders WHERE id=?", (contract_order_id,))
+    row = cur.fetchone()
+    if not row:
+        return
+    order_qty = row[0] or 0
+    
+    # Get total inbound quantity
+    cur.execute("SELECT SUM(inbound_qty) FROM inbound_orders WHERE contract_order_id=?", (contract_order_id,))
+    r = cur.fetchone()
+    inbound_sum = r[0] if r and r[0] else 0
+    
+    new_status = '新增'
+    if inbound_sum >= order_qty:
+        new_status = '已入库'
+    elif inbound_sum > 0:
+        new_status = '部分入库'
+        
+    cur.execute("UPDATE contract_orders SET status=? WHERE id=?", (new_status, contract_order_id))
+
+
+def save_inbound_order(data: dict):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO inbound_orders(
+                inbound_no, contract_order_id, contract_no, order_no, purch_plan_no, 
+                spec_model, order_qty, inbound_qty, warehouse_no, inbound_date, 
+                operator, create_time, remarks
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                data['inbound_no'], data['contract_order_id'], data['contract_no'], 
+                data['order_no'], data['purch_plan_no'], data['spec_model'], 
+                data['order_qty'], data['inbound_qty'], data['warehouse_no'], 
+                data['inbound_date'], data.get('operator', ''), 
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get('remarks', '')
+            )
+        )
+        
+        _update_contract_order_status(cur, data.get('contract_order_id'))
+            
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def fetch_inbound_orders(filter_text=None, date_range=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                id, inbound_no, inbound_date, contract_no, order_no, purch_plan_no, 
+                spec_model, order_qty, inbound_qty, warehouse_no, remarks
+            FROM inbound_orders
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (inbound_no LIKE ? OR contract_no LIKE ? OR order_no LIKE ? OR warehouse_no LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 4)
+            
+        if date_range:
+            start, end = date_range
+            sql += " AND inbound_date BETWEEN ? AND ?"
+            params.extend([start, end])
+            
+        sql += " ORDER BY inbound_date DESC, id DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def update_inbound_order(data: dict):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # Get contract_order_id first
+        cur.execute("SELECT contract_order_id FROM inbound_orders WHERE id=?", (data['id'],))
+        row = cur.fetchone()
+        contract_order_id = row[0] if row else None
+        
+        cur.execute(
+            """
+            UPDATE inbound_orders SET 
+                inbound_date=?, inbound_qty=?, warehouse_no=?, remarks=?
+            WHERE id=?
+            """,
+            (
+                data['inbound_date'], data['inbound_qty'], 
+                data['warehouse_no'], data['remarks'], data['id']
+            )
+        )
+        
+        if contract_order_id:
+            _update_contract_order_status(cur, contract_order_id)
+            
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_inbound_order(inbound_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Get contract_order_id first
+        cur.execute("SELECT contract_order_id FROM inbound_orders WHERE id=?", (inbound_id,))
+        row = cur.fetchone()
+        contract_order_id = row[0] if row else None
+        
+        cur.execute("DELETE FROM inbound_orders WHERE id=?", (inbound_id,))
+        
+        if contract_order_id:
+            _update_contract_order_status(cur, contract_order_id)
+            
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def fetch_contract_orders_for_inbound(filter_text=None):
+    # Returns list of pending orders suitable for inbound
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # 1. Get all contract orders
+        # Join with contracts to get contract_no and category
+        sql = """
+            SELECT 
+                co.id, co.order_no, c.contract_number, c.name, c.category,
+                cs.spec_model, co.quantity, co.purch_plan_no, co.order_date
+            FROM contract_orders co
+            JOIN contracts c ON co.contract_id = c.id
+            LEFT JOIN contract_specs cs ON co.spec_id = cs.id
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (co.order_no LIKE ? OR c.contract_number LIKE ? OR c.name LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 3)
+            
+        sql += " ORDER BY co.order_date DESC"
+        cur.execute(sql, params)
+        orders = cur.fetchall()
+        
+        # 2. Get already inbound qty per contract_order_id
+        cur.execute("SELECT contract_order_id, SUM(inbound_qty) FROM inbound_orders GROUP BY contract_order_id")
+        inbound_map = {r[0]: r[1] for r in cur.fetchall()}
+        
+        results = []
+        for r in orders:
+            # co.id, order_no, contract_no, c_name, category, spec, qty, purch_no, date
+            oid, ono, cno, cname, cat, spec, qty, pno, date = r
+            qty = qty or 0
+            inbound = inbound_map.get(oid, 0)
+            remaining = qty - inbound
+            
+            results.append({
+                'id': oid,
+                'order_no': ono,
+                'contract_no': cno,
+                'contract_name': cname,
+                'category': cat,
+                'spec': spec,
+                'qty': qty,
+                'inbound_total': inbound,
+                'remaining': remaining,
+                'purch_plan_no': pno,
+                'date': date
+            })
+            
+        return results
+    finally:
+        conn.close()
+
+
+# --- Contract & Supplier Management Functions ---
+
+def fetch_suppliers():
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM suppliers ORDER BY name")
+        return [r[0] for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+def add_supplier(name: str) -> bool:
+    name = name.strip()
+    if not name: return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO suppliers(name) VALUES(?)", (name,))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def rename_supplier(old_name: str, new_name: str) -> bool:
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name == new_name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM suppliers WHERE name=?", (new_name,))
+        if cur.fetchone():
+            return False
+        cur.execute("UPDATE suppliers SET name=? WHERE name=?", (new_name, old_name))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+def fetch_contract_categories():
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM contract_categories ORDER BY name")
+        return [r[0] for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+def add_contract_category(name: str) -> bool:
+    name = name.strip()
+    if not name: return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO contract_categories(name) VALUES(?)", (name,))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def rename_contract_category(old_name: str, new_name: str) -> bool:
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name == new_name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM contract_categories WHERE name=?", (new_name,))
+        if cur.fetchone():
+            return False
+        cur.execute("UPDATE contract_categories SET name=? WHERE name=?", (new_name, old_name))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_contract_category(name: str) -> bool:
+    name = name.strip()
+    if not name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM contract_categories WHERE name=?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def fetch_contracts(filter_text=None, category=None, supplier=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Including executed_amount subquery
+        sql = """
+            SELECT 
+                c.id, c.contract_number, c.name, c.category, c.supplier, 
+                c.sign_date, c.end_date, c.amount, c.status, c.attachment,
+                (SELECT SUM(total_price) FROM contract_orders WHERE contract_id = c.id) as executed_amount
+            FROM contracts c
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (c.contract_number LIKE ? OR c.name LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 2)
+        if category and category != "全部":
+            sql += " AND c.category = ?"
+            params.append(category)
+        if supplier and supplier != "全部":
+            sql += " AND c.supplier = ?"
+            params.append(supplier)
+            
+        sql += " ORDER BY c.created_at DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def save_contract(data):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        if 'id' in data and data['id']:
+            # Update
+            sql = """
+                UPDATE contracts SET 
+                    contract_number=?, name=?, category=?, supplier=?, 
+                    sign_date=?, end_date=?, amount=?, status=?, attachment=?, remarks=?
+                WHERE id=?
+            """
+            cur.execute(sql, (
+                data['contract_number'], data['name'], data['category'], data['supplier'],
+                data['sign_date'], data['end_date'], data['amount'], data['status'], 
+                data['attachment'], data['remarks'], data['id']
+            ))
+        else:
+            # Insert
+            sql = """
+                INSERT INTO contracts (
+                    contract_number, name, category, supplier, 
+                    sign_date, end_date, amount, status, attachment, remarks, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """
+            cur.execute(sql, (
+                data['contract_number'], data['name'], data['category'], data['supplier'],
+                data['sign_date'], data['end_date'], data['amount'], "执行中", 
+                data['attachment'], data['remarks'], datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError as e:
+        raise Exception("合同编号已存在")
+    finally:
+        conn.close()
+
+def get_contract_by_id(contract_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Return structure matches what edit_contract expects:
+        # 0:id, 1:no, 2:name, 3:cat, 4:sup, 5:sign, 6:end, 7:amt, 8:rem, 9:status, 10:doc
+        sql = """
+            SELECT 
+                id, contract_number, name, category, supplier, 
+                sign_date, end_date, amount, remarks, status, attachment
+            FROM contracts WHERE id=?
+        """
+        cur.execute(sql, (contract_id,))
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+def save_contract_attachment(contract_id, file_name, file_path):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO contract_attachments(contract_id, file_name, file_path, upload_time) VALUES(?,?,?,?)",
+            (contract_id, file_name, file_path, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def delete_contract(contract_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Manually cascade delete
+        cur.execute("DELETE FROM contract_orders WHERE contract_id=?", (contract_id,))
+        cur.execute("DELETE FROM contract_specs WHERE contract_id=?", (contract_id,))
+        cur.execute("DELETE FROM contract_attachments WHERE contract_id=?", (contract_id,))
+        cur.execute("DELETE FROM contracts WHERE id=?", (contract_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def fetch_contract_specs(contract_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, spec_model, unit, quantity, unit_price, total_price, executed_qty FROM contract_specs WHERE contract_id=?", (contract_id,))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def save_contract_spec(data):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        if 'id' in data and data['id']:
+            cur.execute(
+                "UPDATE contract_specs SET spec_model=?, unit=?, quantity=?, unit_price=?, total_price=? WHERE id=?",
+                (data['spec_model'], data['unit'], data['quantity'], data['unit_price'], data['total_price'], data['id'])
+            )
+        else:
+            cur.execute(
+                "INSERT INTO contract_specs(contract_id, spec_model, unit, quantity, unit_price, total_price, executed_qty) VALUES(?,?,?,?,?,?,0)",
+                (data['contract_id'], data['spec_model'], data['unit'], data['quantity'], data['unit_price'], data['total_price'])
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+def save_contract_specs_transaction(contract_id, specs_data):
+    # specs_data: list of (id, model, unit, qty, price, total)
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # Fetch existing IDs
+        cur.execute("SELECT id FROM contract_specs WHERE contract_id=?", (contract_id,))
+        existing_ids = {r[0] for r in cur.fetchall()}
+        
+        incoming_ids = set()
+        
+        for sp in specs_data:
+            sid, model, unit, qty, price, total = sp
+            if sid:
+                incoming_ids.add(sid)
+                cur.execute(
+                    "UPDATE contract_specs SET spec_model=?, unit=?, quantity=?, unit_price=?, total_price=? WHERE id=?",
+                    (model, unit, qty, price, total, sid)
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO contract_specs(contract_id, spec_model, unit, quantity, unit_price, total_price, executed_qty) VALUES(?,?,?,?,?,?,0)",
+                    (contract_id, model, unit, qty, price, total)
+                )
+        
+        # Delete removed specs
+        to_delete = existing_ids - incoming_ids
+        for did in to_delete:
+            # Check if used in orders
+            cur.execute("SELECT COUNT(1) FROM contract_orders WHERE spec_id=?", (did,))
+            if cur.fetchone()[0] > 0:
+                raise Exception(f"规格(ID:{did})已被订单引用，无法删除。请先删除相关订单。")
+            cur.execute("DELETE FROM contract_specs WHERE id=?", (did,))
+            
+        conn.commit()
+    finally:
+        conn.close()
+
+def delete_contract_spec(spec_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM contract_specs WHERE id=?", (spec_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def fetch_contract_orders(contract_id, filter_no=None, date_from=None, date_to=None, filter_spec=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Explicit column selection to ensure order
+        # 0:id, 1:date, 2:no, 3:model, 4:qty, 5:price, 6:total, 7:sales, 8:prod, 9:purch, 10:status, 11:remark, 12:spec_id
+        sql = """
+            SELECT 
+                co.id, co.order_date, co.order_no, cs.spec_model, 
+                co.quantity, co.unit_price, co.total_price, 
+                co.sales_order, co.prod_order, co.purch_plan_no, 
+                co.status, co.remarks, co.spec_id
+            FROM contract_orders co
+            LEFT JOIN contract_specs cs ON co.spec_id = cs.id
+            WHERE co.contract_id=?
+        """
+        params = [contract_id]
+        
+        if filter_no:
+            sql += " AND co.order_no LIKE ?"
+            params.append(f"%{filter_no}%")
+        
+        if date_from:
+            sql += " AND co.order_date >= ?"
+            params.append(date_from)
+            
+        if date_to:
+            sql += " AND co.order_date <= ?"
+            params.append(date_to)
+            
+        if filter_spec:
+            sql += " AND cs.spec_model LIKE ?"
+            params.append(f"%{filter_spec}%")
+            
+        sql += " ORDER BY co.order_date DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def save_contract_order(data):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        if 'id' in data and data['id']:
+            cur.execute(
+                """
+                UPDATE contract_orders SET 
+                    spec_id=?, order_date=?, order_no=?, quantity=?, unit_price=?, 
+                    total_price=?, sales_order=?, prod_order=?, purch_plan_no=?, status=?, remarks=?
+                WHERE id=?
+                """,
+                (
+                    data['spec_id'], data['order_date'], data['order_no'], data['quantity'], 
+                    data['unit_price'], data['total_price'], data['sales_order'], 
+                    data['prod_order'], data['purch_plan_no'], data.get('status', '新增'), data['remarks'], data['id']
+                )
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO contract_orders(
+                    contract_id, spec_id, order_date, order_no, quantity, unit_price, 
+                    total_price, sales_order, prod_order, purch_plan_no, status, remarks
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    data['contract_id'], data['spec_id'], data['order_date'], data['order_no'],
+                    data['quantity'], data['unit_price'], data['total_price'], 
+                    data['sales_order'], data['prod_order'], data['purch_plan_no'], data.get('status', '新增'), data['remarks']
+                )
+            )
+            
+        # Update executed qty in specs
+        cur.execute("SELECT SUM(quantity) FROM contract_orders WHERE spec_id=?", (data['spec_id'],))
+        total_qty = cur.fetchone()[0] or 0
+        cur.execute("UPDATE contract_specs SET executed_qty=? WHERE id=?", (total_qty, data['spec_id']))
+        
+        conn.commit()
+    finally:
+        conn.close()
+
+def delete_contract_order(order_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Get spec_id before delete to update count
+        cur.execute("SELECT spec_id FROM contract_orders WHERE id=?", (order_id,))
+        row = cur.fetchone()
+        if not row: return
+        spec_id = row[0]
+        
+        cur.execute("DELETE FROM contract_orders WHERE id=?", (order_id,))
+        
+        # Update executed qty
+        cur.execute("SELECT SUM(quantity) FROM contract_orders WHERE spec_id=?", (spec_id,))
+        total_qty = cur.fetchone()[0] or 0
+        cur.execute("UPDATE contract_specs SET executed_qty=? WHERE id=?", (total_qty, spec_id))
+        
+        conn.commit()
+    finally:
+        conn.close()
+
+
+
 
 def update_release_status(order_number: str, purchaser: str, new_status: str):
     conn = _connect()

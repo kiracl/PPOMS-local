@@ -15,6 +15,8 @@ from ui_recommendation import RecommendationWidget
 from ui_monthly_plan import MonthlyPlanWidget
 from ui_data_manager import DataManagerWidget
 from ui_plan_export import PlanExportWidget
+from ui_contract import ContractManagerWidget
+from ui_inbound import InboundManagerWidget
 import database
 from print import export_order_pdf
 
@@ -22,7 +24,7 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.0.0008")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.3.0168")
         
         # Main Container
         container = QWidget()
@@ -60,6 +62,8 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("计划发放")
         self.sidebar.addItem("计划导出")
         self.sidebar.addItem("自动推荐")
+        self.sidebar.addItem("合同管理")
+        self.sidebar.addItem("入库管理")
         self.sidebar.addItem("数据管理")
         main_layout.addWidget(self.sidebar)
         
@@ -99,7 +103,15 @@ class MainWindow(QMainWindow):
         self.recommendation = RecommendationWidget()
         self.right_stack.addWidget(self.recommendation)
         
-        # 7. Data Manager Page (Index 6)
+        # 7. Contract Manager Page (Index 6)
+        self.contract_manager = ContractManagerWidget()
+        self.right_stack.addWidget(self.contract_manager)
+
+        # 8. Inbound Manager Page (Index 7)
+        self.inbound_manager = InboundManagerWidget()
+        self.right_stack.addWidget(self.inbound_manager)
+
+        # 9. Data Manager Page (Index 8)
         self.data_manager = DataManagerWidget()
         self.right_stack.addWidget(self.data_manager)
         
@@ -127,6 +139,10 @@ class MainWindow(QMainWindow):
         act_status.triggered.connect(self.open_status_settings)
         act_months = menu.addAction("计划月份")
         act_months.triggered.connect(self.open_month_settings)
+        act_contract_cats = menu.addAction("合同类别")
+        act_contract_cats.triggered.connect(self.open_contract_category_settings)
+        act_suppliers = menu.addAction("供应商")
+        act_suppliers.triggered.connect(self.open_supplier_settings)
         
         tools = self.menuBar().addMenu("工具")
         act_validate = tools.addAction("校验明细序号")
@@ -150,6 +166,10 @@ class MainWindow(QMainWindow):
         elif index == 4:
             self.plan_export.load_months()
         elif index == 6:
+            self.contract_manager.load_data()
+        elif index == 7:
+            self.inbound_manager.load_history()
+        elif index == 8:
             self.data_manager.load_backups()
 
     def get_display_name(self, path):
@@ -352,26 +372,40 @@ class MainWindow(QMainWindow):
         self.workbench.set_months(months)
 
     def open_settings(self):
-        dlg = SettingsDialog(database.fetch_units, database.add_unit, database.rename_unit)
+        dlg = SettingsDialog(database.fetch_units, database.add_unit, database.rename_unit, database.delete_unit)
         dlg.setWindowTitle("设置 - 需求单位")
         dlg.exec()
         self.refresh_units()
 
     def open_purchaser_settings(self):
-        dlg = SettingsDialog(database.fetch_purchasers, database.add_purchaser, database.rename_purchaser)
+        dlg = SettingsDialog(database.fetch_purchasers, database.add_purchaser, database.rename_purchaser, database.delete_purchaser)
         dlg.setWindowTitle("设置 - 采购员")
         dlg.exec()
         
     def open_status_settings(self):
-        dlg = SettingsDialog(database.fetch_purchase_statuses, database.add_purchase_status, database.rename_purchase_status)
+        dlg = SettingsDialog(database.fetch_purchase_statuses, database.add_purchase_status, database.rename_purchase_status, database.delete_purchase_status)
         dlg.setWindowTitle("设置 - 采购状态")
         dlg.exec()
 
     def open_month_settings(self):
-        dlg = SettingsDialog(database.fetch_plan_months, database.add_plan_month, database.rename_plan_month)
+        dlg = SettingsDialog(database.fetch_plan_months, database.add_plan_month, database.rename_plan_month, database.delete_plan_month)
         dlg.setWindowTitle("设置 - 计划月份")
         dlg.exec()
         self.refresh_months()
+
+    def open_contract_category_settings(self):
+        dlg = SettingsDialog(database.fetch_contract_categories, database.add_contract_category, database.rename_contract_category, database.delete_contract_category)
+        dlg.setWindowTitle("设置 - 合同类别")
+        dlg.exec()
+        if hasattr(self, 'contract_manager'):
+            self.contract_manager.refresh_categories()
+
+    def open_supplier_settings(self):
+        dlg = SettingsDialog(database.fetch_suppliers, database.add_supplier, database.rename_supplier, database.delete_supplier)
+        dlg.setWindowTitle("设置 - 供应商")
+        dlg.exec()
+        if hasattr(self, 'contract_manager'):
+            self.contract_manager.refresh_suppliers()
 
     def show_context_menu(self, pos):
         item = self.form.table.itemAt(pos)

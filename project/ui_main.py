@@ -368,27 +368,33 @@ class ChangeDateDialog(QDialog):
         return self.date_edit.date().toString("yyyy-MM-dd")
 
 class SettingsDialog(QDialog):
-    def __init__(self, fetch_units_fn, add_unit_fn, rename_unit_fn):
+    def __init__(self, fetch_units_fn, add_unit_fn, rename_unit_fn, delete_unit_fn=None):
         super().__init__()
         self.setWindowTitle("设置")
         self.fetch_units_fn = fetch_units_fn
         self.add_unit_fn = add_unit_fn
         self.rename_unit_fn = rename_unit_fn
+        self.delete_unit_fn = delete_unit_fn
         lay = QVBoxLayout(self)
         self.list = QListWidget()
         self.input = QLineEdit()
         btns = QHBoxLayout()
         self.btn_add = QPushButton("添加")
         self.btn_rename = QPushButton("重命名")
+        self.btn_delete = QPushButton("删除")
+        if not self.delete_unit_fn:
+            self.btn_delete.setVisible(False)
         self.btn_close = QPushButton("关闭")
         lay.addWidget(self.list)
         lay.addWidget(self.input)
         btns.addWidget(self.btn_add)
         btns.addWidget(self.btn_rename)
+        btns.addWidget(self.btn_delete)
         btns.addWidget(self.btn_close)
         lay.addLayout(btns)
         self.btn_add.clicked.connect(self.add_unit)
         self.btn_rename.clicked.connect(self.rename_unit)
+        self.btn_delete.clicked.connect(self.delete_unit)
         self.btn_close.clicked.connect(self.accept)
         self.reload()
 
@@ -411,3 +417,17 @@ class SettingsDialog(QDialog):
         if self.rename_unit_fn(item.text(), new_name):
             self.reload()
             self.input.clear()
+            
+    def delete_unit(self):
+        item = self.list.currentItem()
+        if not item or not self.delete_unit_fn:
+            return
+        name = item.text()
+        from PySide6.QtWidgets import QMessageBox
+        ret = QMessageBox.question(self, "确认", f"确定要删除 '{name}' 吗？", QMessageBox.Yes | QMessageBox.No)
+        if ret == QMessageBox.Yes:
+            if self.delete_unit_fn(name):
+                self.reload()
+                self.input.clear()
+            else:
+                QMessageBox.warning(self, "错误", "删除失败")

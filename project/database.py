@@ -211,6 +211,24 @@ def _init_schema(conn: sqlite3.Connection):
     )
     conn.commit()
 
+    # --- NEW TABLE: plan_search_items ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS plan_search_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence_no TEXT UNIQUE,
+            main_order_no TEXT,
+            demand_unit TEXT,
+            item_name TEXT,
+            spec_model TEXT,
+            qty REAL,
+            unit TEXT,
+            plan_date TEXT
+        )
+        """
+    )
+    conn.commit()
+
     cur.execute("SELECT COUNT(1) FROM units")
     cnt = cur.fetchone()[0]
     if cnt == 0:
@@ -294,6 +312,72 @@ def _init_schema(conn: sqlite3.Connection):
 
 def _migrate_schema(conn: sqlite3.Connection):
     cur = conn.cursor()
+    # Ensure core tables exist (idempotent)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS counter (
+            yymm TEXT NOT NULL,
+            category TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (yymm, category)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS detail_counter (
+            yymm TEXT NOT NULL,
+            category TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (yymm, category)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orders (
+            number TEXT PRIMARY KEY,
+            yymm TEXT,
+            category TEXT,
+            unit TEXT,
+            date TEXT,
+            task_name TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_number TEXT,
+            detail_no TEXT,
+            item_name TEXT,
+            purchase_item TEXT,
+            spec_model TEXT,
+            purchase_cycle TEXT,
+            stock_count TEXT,
+            purchase_qty TEXT,
+            unit TEXT,
+            unit_price TEXT,
+            budget_wan TEXT,
+            purchase_method TEXT,
+            purchase_channel TEXT,
+            plan_time TEXT,
+            demand_unit TEXT,
+            plan_release TEXT,
+            progress_req TEXT,
+            supplier TEXT,
+            inquiry_price TEXT,
+            tax_rate TEXT,
+            actual_status TEXT,
+            purchase_body TEXT,
+            add_adjust TEXT,
+            remark TEXT
+        )
+        """
+    )
+    conn.commit()
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS operation_logs (
@@ -572,19 +656,6 @@ def _migrate_schema(conn: sqlite3.Connection):
         cur.execute("ALTER TABLE contracts ADD COLUMN created_at TEXT")
     conn.commit()
     
-    # Check contract_orders columns
-    cur.execute("PRAGMA table_info(contract_orders)")
-    cols = [r[1] for r in cur.fetchall()]
-    if "sales_order" not in cols:
-        cur.execute("ALTER TABLE contract_orders ADD COLUMN sales_order TEXT")
-    if "prod_order" not in cols:
-        cur.execute("ALTER TABLE contract_orders ADD COLUMN prod_order TEXT")
-    if "purch_plan_no" not in cols:
-        cur.execute("ALTER TABLE contract_orders ADD COLUMN purch_plan_no TEXT")
-    if "status" not in cols:
-        cur.execute("ALTER TABLE contract_orders ADD COLUMN status TEXT DEFAULT '新增'")
-    conn.commit()
-    
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS contract_specs (
@@ -617,6 +688,7 @@ def _migrate_schema(conn: sqlite3.Connection):
             sales_order TEXT,
             prod_order TEXT,
             purch_plan_no TEXT,
+            status TEXT DEFAULT '新增',
             remarks TEXT,
             FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
             FOREIGN KEY(spec_id) REFERENCES contract_specs(id) ON DELETE CASCADE
@@ -624,6 +696,38 @@ def _migrate_schema(conn: sqlite3.Connection):
         """
     )
     conn.commit()
+    
+    # Check contract_orders columns
+    cur.execute("PRAGMA table_info(contract_orders)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "sales_order" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN sales_order TEXT")
+    if "prod_order" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN prod_order TEXT")
+    if "purch_plan_no" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN purch_plan_no TEXT")
+    if "status" not in cols:
+        cur.execute("ALTER TABLE contract_orders ADD COLUMN status TEXT DEFAULT '新增'")
+    conn.commit()
+    
+    # --- NEW TABLE MIGRATION: plan_search_items ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS plan_search_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence_no TEXT UNIQUE,
+            main_order_no TEXT,
+            demand_unit TEXT,
+            item_name TEXT,
+            spec_model TEXT,
+            qty REAL,
+            unit TEXT,
+            plan_date TEXT
+        )
+        """
+    )
+    conn.commit()
+
 
 
 def init_db():
@@ -877,6 +981,82 @@ def fetch_orders(number_filter=None, task_filter=None, unit_filter=None, month_f
         sql += " ORDER BY orders.rowid DESC"
         cur.execute(sql, params)
         return cur.fetchall()
+    finally:
+        conn.close()
+
+def sync_plan_search_items_from_orders():
+    """
+    Sync data from order_details and orders to plan_search_items.
+    Only adds/updates based on sequence_no (detail_no).
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # Select from order_details + orders
+        # Mapping:
+        # sequence_no <= detail_no
+        # main_order_no <= order_number
+        # demand_unit <= orders.unit
+        # item_name <= purchase_item
+        # spec_model <= spec_model
+        # qty <= purchase_qty
+        # unit <= unit
+        # plan_date <= orders.date
+        
+        sql_src = """
+            SELECT 
+                od.detail_no, 
+                od.order_number, 
+                o.unit as demand_unit, 
+                od.purchase_item, 
+                od.spec_model, 
+                od.purchase_qty, 
+                od.unit as unit, 
+                o.date as plan_date
+            FROM order_details od
+            JOIN orders o ON od.order_number = o.number
+            WHERE od.detail_no IS NOT NULL AND od.detail_no != ''
+        """
+        
+        cur.execute(sql_src)
+        rows = cur.fetchall()
+        
+        count = 0
+        for row in rows:
+            # row: detail_no, order_number, demand_unit, purchase_item, spec_model, purchase_qty, unit, plan_date
+            seq = row[0]
+            
+            # Check if exists
+            cur.execute("SELECT id FROM plan_search_items WHERE sequence_no=?", (seq,))
+            existing = cur.fetchone()
+            
+            if existing:
+                # Update
+                cur.execute(
+                    """
+                    UPDATE plan_search_items SET 
+                        main_order_no=?, demand_unit=?, item_name=?, spec_model=?, 
+                        qty=?, unit=?, plan_date=?
+                    WHERE sequence_no=?
+                    """,
+                    (row[1], row[2], row[3], row[4], row[5], row[6], row[7], seq)
+                )
+            else:
+                # Insert
+                cur.execute(
+                    """
+                    INSERT INTO plan_search_items(
+                        sequence_no, main_order_no, demand_unit, item_name, spec_model, 
+                        qty, unit, plan_date
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (seq, row[1], row[2], row[3], row[4], row[5], row[6], row[7])
+                )
+            count += 1
+            
+        conn.commit()
+        return count
     finally:
         conn.close()
 
@@ -1386,6 +1566,19 @@ def rename_plan_month(old_name: str, new_name: str) -> bool:
     finally:
         conn.close()
 
+def delete_plan_month(name: str) -> bool:
+    name = name.strip()
+    if not name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM plan_months WHERE name=?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
 def fetch_release_orders(number_filter=None, purchaser_filter=None, task_filter=None, month_filter=None, unit_filter=None):
     conn = _connect()
     try:
@@ -1711,6 +1904,19 @@ def rename_supplier(old_name: str, new_name: str) -> bool:
         if cur.fetchone():
             return False
         cur.execute("UPDATE suppliers SET name=? WHERE name=?", (new_name, old_name))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+def delete_supplier(name: str) -> bool:
+    name = name.strip()
+    if not name:
+        return False
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM suppliers WHERE name=?", (name,))
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -2194,28 +2400,61 @@ def get_workbench_stats(yymm_filter: str):
         conn.close()
 
 
-def fetch_recommendations():
+def fetch_recommendations(filter_text=None):
     conn = _connect()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id, item_name, plan_release, weight, is_active, purchase_method, purchase_channel FROM recommendations ORDER BY id")
+        sql = "SELECT id, item_name, plan_release, weight, is_active, purchase_method, purchase_channel FROM recommendations WHERE 1=1"
+        params = []
+        if filter_text:
+            sql += " AND item_name LIKE ?"
+            params.append(f"%{filter_text}%")
+        sql += " ORDER BY id"
+        cur.execute(sql, params)
         return cur.fetchall()
     finally:
         conn.close()
 
 
-def save_recommendations_transaction(rows_data_list: list):
+def save_recommendations_upsert(rows_data_list: list):
     """
-    rows_data_list: list of (item_name, plan_release, weight, is_active, purchase_method, purchase_channel)
+    rows_data_list: list of (id, item_name, plan_release, weight, is_active, purchase_method, purchase_channel)
+    If id is None, INSERT. If id exists, UPDATE.
     """
     conn = _connect()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM recommendations")
-        cur.executemany(
-            "INSERT INTO recommendations(item_name, plan_release, weight, is_active, purchase_method, purchase_channel) VALUES(?,?,?,?,?,?)",
-            rows_data_list
-        )
+        for row in rows_data_list:
+            rid, item_name, plan_release, weight, is_active, p_method, p_channel = row
+            if rid:
+                # Update
+                cur.execute(
+                    """
+                    UPDATE recommendations SET 
+                        item_name=?, plan_release=?, weight=?, is_active=?, purchase_method=?, purchase_channel=?
+                    WHERE id=?
+                    """,
+                    (item_name, plan_release, weight, is_active, p_method, p_channel, rid)
+                )
+            else:
+                # Insert
+                cur.execute(
+                    """
+                    INSERT INTO recommendations(item_name, plan_release, weight, is_active, purchase_method, purchase_channel)
+                    VALUES(?,?,?,?,?,?)
+                    """,
+                    (item_name, plan_release, weight, is_active, p_method, p_channel)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_recommendation(rid: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM recommendations WHERE id=?", (rid,))
         conn.commit()
     finally:
         conn.close()
@@ -2645,5 +2884,162 @@ def fetch_monthly_details_for_export(yymm: str):
             
         rows.sort(key=sort_key)
         return rows
+    finally:
+        conn.close()
+
+# --- Plan Search (Retrieval) Functions ---
+
+def fetch_plan_search_items(filter_seq=None, filter_item=None, filter_order=None, filter_unit=None, 
+                           page=1, page_size=20, sort_by=None, sort_desc=False):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                sequence_no, main_order_no, demand_unit, item_name, spec_model, 
+                qty, unit, plan_date
+            FROM plan_search_items
+            WHERE 1=1
+        """
+        params = []
+        
+        if filter_seq:
+            sql += " AND sequence_no = ?"
+            params.append(filter_seq)
+            
+        if filter_item:
+            sql += " AND item_name LIKE ?"
+            params.append(f"%{filter_item}%")
+            
+        if filter_order:
+            sql += " AND main_order_no = ?"
+            params.append(filter_order)
+            
+        if filter_unit and filter_unit != "全部":
+            sql += " AND demand_unit = ?"
+            params.append(filter_unit)
+            
+        # Count total
+        count_sql = f"SELECT COUNT(1) FROM ({sql})"
+        cur.execute(count_sql, params)
+        total_count = cur.fetchone()[0]
+        
+        # Sorting
+        if sort_by:
+            # Map UI column names to DB fields if necessary, or use field names directly
+            # Assuming sort_by is one of the field names
+            direction = "DESC" if sort_desc else "ASC"
+            sql += f" ORDER BY {sort_by} {direction}"
+        else:
+            # Default sort by id/sequence?
+            # User said "Default load all... Support sort". 
+            # Let's default to sequence_no ASC or ID ASC?
+            # Usually users want to see recently added or just sorted by sequence.
+            # Let's try to sort by sequence_no naturally if possible, or just string sort.
+            sql += " ORDER BY id DESC"
+            
+        # Pagination
+        offset = (page - 1) * page_size
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([page_size, offset])
+        
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        
+        return rows, total_count
+    finally:
+        conn.close()
+
+def import_plan_search_items(data_list):
+    """
+    data_list: list of dicts with keys matching table columns
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        inserted = 0
+        updated = 0
+        
+        for item in data_list:
+            seq = item.get('sequence_no')
+            if not seq:
+                continue
+                
+            # Check if exists
+            cur.execute("SELECT id FROM plan_search_items WHERE sequence_no=?", (seq,))
+            row = cur.fetchone()
+            
+            if row:
+                # Update
+                cur.execute(
+                    """
+                    UPDATE plan_search_items SET 
+                        main_order_no=?, demand_unit=?, item_name=?, spec_model=?, 
+                        qty=?, unit=?, plan_date=?
+                    WHERE sequence_no=?
+                    """,
+                    (
+                        item.get('main_order_no'), item.get('demand_unit'), item.get('item_name'), 
+                        item.get('spec_model'), item.get('qty'), item.get('unit'), 
+                        item.get('plan_date'), seq
+                    )
+                )
+                updated += 1
+            else:
+                # Insert
+                cur.execute(
+                    """
+                    INSERT INTO plan_search_items(
+                        sequence_no, main_order_no, demand_unit, item_name, spec_model, 
+                        qty, unit, plan_date
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        seq, item.get('main_order_no'), item.get('demand_unit'), 
+                        item.get('item_name'), item.get('spec_model'), item.get('qty'), 
+                        item.get('unit'), item.get('plan_date')
+                    )
+                )
+                inserted += 1
+                
+        conn.commit()
+        return inserted, updated
+    finally:
+        conn.close()
+
+def get_all_plan_search_items_for_export(filter_seq=None, filter_item=None, filter_order=None, filter_unit=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                sequence_no, main_order_no, demand_unit, item_name, spec_model, 
+                qty, unit, plan_date
+            FROM plan_search_items
+            WHERE 1=1
+        """
+        params = []
+        
+        if filter_seq:
+            sql += " AND sequence_no = ?"
+            params.append(filter_seq)
+            
+        if filter_item:
+            sql += " AND item_name LIKE ?"
+            params.append(f"%{filter_item}%")
+            
+        if filter_order:
+            sql += " AND main_order_no = ?"
+            params.append(filter_order)
+            
+        if filter_unit and filter_unit != "全部":
+            sql += " AND demand_unit = ?"
+            params.append(filter_unit)
+            
+        sql += " ORDER BY sequence_no"
+        
+        cur.execute(sql, params)
+        return cur.fetchall()
     finally:
         conn.close()

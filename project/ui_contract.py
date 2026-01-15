@@ -703,6 +703,7 @@ class ContractOrderWidget(QWidget):
         
         self.date_edit = QDateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.order_no = QLineEdit()
         self.order_no.setPlaceholderText("订单编号")
         
@@ -713,7 +714,6 @@ class ContractOrderWidget(QWidget):
         self.spec_combo = QComboBox()
         self.spec_combo.currentIndexChanged.connect(self.on_spec_selected)
         self.specs_map = {} # ID -> (Model, Unit, Price, Remaining)
-        self.load_specs_combo()
         
         self.unit_lbl = QLabel("单位")
         self.qty_spin = QDoubleSpinBox()
@@ -727,6 +727,9 @@ class ContractOrderWidget(QWidget):
         self.total_lbl = QLabel("0.00")
         
         self.remarks = QLineEdit()
+        
+        # Load specs after UI elements are created
+        self.load_specs_combo()
         
         btn_add = QPushButton("添加记录")
         btn_add.setObjectName("primary")
@@ -783,8 +786,10 @@ class ContractOrderWidget(QWidget):
         
         self.filter_date_start = QDateEdit(QDate.currentDate().addMonths(-1))
         self.filter_date_start.setCalendarPopup(True)
+        self.filter_date_start.setDisplayFormat("yyyy-MM-dd")
         self.filter_date_end = QDateEdit(QDate.currentDate())
         self.filter_date_end.setCalendarPopup(True)
+        self.filter_date_end.setDisplayFormat("yyyy-MM-dd")
         
         date_layout.addWidget(QLabel("从"))
         date_layout.addWidget(self.filter_date_start)
@@ -849,6 +854,7 @@ class ContractOrderWidget(QWidget):
                 self.load_specs_combo()
 
     def load_specs_combo(self):
+        self.spec_combo.blockSignals(True)
         specs = database.fetch_contract_specs(self.contract_id)
         self.spec_combo.clear()
         self.specs_map = {}
@@ -859,6 +865,15 @@ class ContractOrderWidget(QWidget):
             label = f"{model} (余: {rem})"
             self.spec_combo.addItem(label, sid)
             self.specs_map[sid] = (model, unit, price, rem)
+        self.spec_combo.blockSignals(False)
+        
+        if self.spec_combo.count() > 0:
+            self.on_spec_selected()
+        else:
+            self.unit_lbl.setText("单位")
+            self.price_spin.setValue(0)
+            self.qty_spin.setValue(0)
+            self.total_lbl.setText("0.00")
 
     def on_spec_selected(self):
         sid = self.spec_combo.currentData()
@@ -900,7 +915,7 @@ class ContractOrderWidget(QWidget):
                 'id': oid,
                 'contract_id': self.contract_id,
                 'spec_id': sid,
-                'order_date': self.date_edit.text(),
+                'order_date': self.date_edit.date().toString("yyyy-MM-dd"),
                 'order_no': self.order_no.text(),
                 'sales_order': self.sales_no.text(),
                 'prod_order': self.prod_no.text(),
@@ -937,6 +952,20 @@ class ContractOrderWidget(QWidget):
             date_to=f_end,
             filter_spec=f_spec
         )
+        
+        # Sort in Python to handle mixed date formats
+        def parse_date_sort(row):
+            d_str = row[1]
+            if not d_str: return datetime.min
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(d_str, fmt)
+                except ValueError:
+                    continue
+            return datetime.min
+
+        orders.sort(key=parse_date_sort, reverse=True)
+
         for row_data in orders:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -968,7 +997,14 @@ class ContractOrderWidget(QWidget):
         oid = int(self.table.item(row, 0).text())
         
         date_str = self.table.item(row, 1).text()
-        self.date_edit.setDate(QDate.fromString(date_str, "yyyy-MM-dd") if date_str else QDate.currentDate())
+        qdate = QDate()
+        if date_str:
+            for fmt in ("yyyy-MM-dd", "M/d/yyyy", "yyyy/MM/dd"):
+                qdate = QDate.fromString(date_str, fmt)
+                if qdate.isValid():
+                    break
+        
+        self.date_edit.setDate(qdate if qdate.isValid() else QDate.currentDate())
         
         self.order_no.setText(self.table.item(row, 2).text())
         self.sales_no.setText(self.table.item(row, 7).text())

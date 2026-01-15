@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QPushButton, QHeaderView, QLabel, QMessageBox, QFileDialog, QAbstractItemView, QFrame, QComboBox, QProgressDialog
+    QPushButton, QHeaderView, QLabel, QMessageBox, QFileDialog, QAbstractItemView, QFrame, QComboBox, QProgressDialog,
+    QLineEdit
 )
 from PySide6.QtCore import Qt, QThread, Signal
 import database
@@ -24,6 +25,21 @@ class RecommendationWidget(QWidget):
         header_layout.addStretch()
         layout.addLayout(header_layout)
         
+        # Search Area
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("采购标的:"))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("输入采购标的关键字搜索...")
+        self.search_input.returnPressed.connect(self.load_data)
+        search_layout.addWidget(self.search_input)
+        
+        self.btn_search = QPushButton("搜索")
+        self.btn_search.clicked.connect(self.load_data)
+        search_layout.addWidget(self.btn_search)
+        
+        search_layout.addStretch()
+        layout.addLayout(search_layout)
+        
         # Toolbar
         toolbar = QHBoxLayout()
         
@@ -39,6 +55,11 @@ class RecommendationWidget(QWidget):
         self.btn_import.setObjectName("btnImport")
         self.btn_import.clicked.connect(self.import_excel)
 
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.setObjectName("btnRefresh")
+        self.btn_refresh.setToolTip("刷新列表数据")
+        self.btn_refresh.clicked.connect(self.load_data)
+
         self.btn_sync = QPushButton("同步推荐信息")
         self.btn_sync.setObjectName("btnSync")
         self.btn_sync.setToolTip("从已发放记录增量同步到推荐库")
@@ -51,6 +72,7 @@ class RecommendationWidget(QWidget):
         toolbar.addWidget(self.btn_add)
         toolbar.addWidget(self.btn_del)
         toolbar.addWidget(self.btn_import)
+        toolbar.addWidget(self.btn_refresh)
         if database.user_has_permission("sync_recommendations"):
             toolbar.addWidget(self.btn_sync)
         toolbar.addStretch()
@@ -75,13 +97,15 @@ class RecommendationWidget(QWidget):
             QPushButton#btnAdd { background-color: #10B981; color: white; }
             QPushButton#btnDel { background-color: #EF4444; color: white; }
             QPushButton#btnImport { background-color: #F59E0B; color: white; }
+            QPushButton#btnRefresh { background-color: #8B5CF6; color: white; }
             QPushButton#btnSync { background-color: #6366F1; color: white; }
             QTableWidget { background-color: white; border: 1px solid #E5E7EB; }
             QHeaderView::section { background-color: #F3F4F6; padding: 6px; border: none; font-weight: bold; }
         """)
 
     def load_data(self):
-        rows = database.fetch_recommendations()
+        filter_text = self.search_input.text().strip() if hasattr(self, 'search_input') else None
+        rows = database.fetch_recommendations(filter_text)
         purchasers = database.fetch_purchasers()
         self.table.setRowCount(0)
         for i, row in enumerate(rows):
@@ -90,7 +114,9 @@ class RecommendationWidget(QWidget):
             self.table.insertRow(r)
             
             # 序号
-            self.table.setItem(r, 0, QTableWidgetItem(str(i + 1)))
+            item_seq = QTableWidgetItem(str(i + 1))
+            item_seq.setData(Qt.UserRole, row[0]) # Store ID
+            self.table.setItem(r, 0, item_seq)
             self.table.item(r, 0).setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable) # Read-only
             
             self.table.setItem(r, 1, QTableWidgetItem(str(row[1] if row[1] else "")))
@@ -135,7 +161,9 @@ class RecommendationWidget(QWidget):
         self.table.insertRow(r)
         
         # 序号
-        self.table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
+        item_seq = QTableWidgetItem(str(r + 1))
+        item_seq.setData(Qt.UserRole, None) # No ID for new row
+        self.table.setItem(r, 0, item_seq)
         self.table.item(r, 0).setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         
         # 计划发放 - Dropdown
@@ -165,6 +193,9 @@ class RecommendationWidget(QWidget):
         if not ranges:
             QMessageBox.warning(self, "提示", "请先选择要删除的行")
             return
+            
+        if QMessageBox.question(self, "确认", "确定要删除选中行吗？此操作将直接删除数据库记录。") != QMessageBox.Yes:
+            return
         
         rows_to_del = set()
         for rng in ranges:
@@ -172,11 +203,35 @@ class RecommendationWidget(QWidget):
                 rows_to_del.add(r)
                 
         for r in sorted(rows_to_del, reverse=True):
-            self.table.removeRow(r)
+            # Check ID
+            item = self.table.item(r, 0)
+            rid = item.data(Qt.UserRole) if item else None
+            
+            try:
+                if rid:
+                    database.delete_recommendation(rid)
+                self.table.removeRow(r)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"删除失败: {str(e)}")
+                return
             
         # Re-number sequences
         for r in range(self.table.rowCount()):
             self.table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
+            # Preserve ID? No, the items shifted, but we need to ensure the ID is still attached to the row.
+            # QTableWidget shifts items automatically when removing rows.
+            # But we are creating NEW QTableWidgetItem for column 0 in this loop:
+            # self.table.setItem(r, 0, QTableWidgetItem(str(r + 1))) -> THIS IS BUGGY!
+            # It overwrites the item and loses the UserRole ID!
+            
+            # FIX: Get existing item, update text, keep data.
+            old_item = self.table.item(r, 0)
+            if old_item:
+                old_item.setText(str(r + 1))
+            else:
+                # Should not happen usually, but if so:
+                new_item = QTableWidgetItem(str(r + 1))
+                self.table.setItem(r, 0, new_item)
 
     def on_method_changed(self, row, text):
         target = ""
@@ -193,6 +248,10 @@ class RecommendationWidget(QWidget):
     def save_data(self):
         rows_data = []
         for r in range(self.table.rowCount()):
+            # Get ID
+            item_seq = self.table.item(r, 0)
+            rid = item_seq.data(Qt.UserRole) if item_seq else None
+            
             item_name = self.table.item(r, 1).text().strip() if self.table.item(r, 1) else ""
             
             # Get plan_release from combo
@@ -220,10 +279,10 @@ class RecommendationWidget(QWidget):
             except ValueError:
                 weight = 0
                 
-            rows_data.append((item_name, plan_release, weight, is_active, p_method, p_channel))
+            rows_data.append((rid, item_name, plan_release, weight, is_active, p_method, p_channel))
             
         try:
-            database.save_recommendations_transaction(rows_data)
+            database.save_recommendations_upsert(rows_data)
             QMessageBox.information(self, "成功", "数据已保存")
             self.load_data()
         except Exception as e:
@@ -284,6 +343,7 @@ class RecommendationWidget(QWidget):
                 self._sync_progress.setValue(val)
         def on_finished(stats):
             self._sync_progress.reset()
+            self.load_data()  # Refresh list after sync
             msg = f"总计: {stats['total']}\n新增: {stats['inserted']}\n跳过: {stats['skipped']}\n失败: {stats['failed']}"
             box = QMessageBox(self)
             box.setWindowTitle("同步完成")
@@ -339,7 +399,9 @@ class RecommendationWidget(QWidget):
                 self.table.insertRow(r)
                 
                 # 序号
-                self.table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
+                item_seq = QTableWidgetItem(str(r + 1))
+                item_seq.setData(Qt.UserRole, None)
+                self.table.setItem(r, 0, item_seq)
                 self.table.item(r, 0).setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 
                 item_name = str(row.get("采购标的", ""))

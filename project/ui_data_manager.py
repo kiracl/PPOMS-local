@@ -1,6 +1,7 @@
 import os
 import shutil
 import datetime
+import zipfile
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, 
@@ -122,7 +123,7 @@ class DataManagerWidget(QWidget):
             
         files = []
         for f in os.listdir(self.backup_dir):
-            if f.endswith(".db"):
+            if f.endswith(".db") or f.endswith(".zip"):
                 path = os.path.join(self.backup_dir, f)
                 stat = os.stat(path)
                 files.append({
@@ -168,14 +169,37 @@ class DataManagerWidget(QWidget):
             h.addWidget(btn_del)
             self.table.setCellWidget(r, 3, w)
 
+    def _create_backup_zip(self, target_zip_path):
+        with zipfile.ZipFile(target_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # 1. Database
+            if os.path.exists(database.DB_PATH):
+                zipf.write(database.DB_PATH, arcname="purchase.db")
+            
+            # 2. Attachments folder (合同附件)
+            base_dir = os.path.dirname(database.DB_PATH)
+            attach_dir = os.path.join(base_dir, "合同附件")
+            if os.path.exists(attach_dir):
+                for root, dirs, files in os.walk(attach_dir):
+                    for file in files:
+                        abs_path = os.path.join(root, file)
+                        # Relative path inside zip
+                        rel_path = os.path.relpath(abs_path, base_dir)
+                        zipf.write(abs_path, arcname=rel_path)
+            
+            # 3. Column Config (optional but good)
+            config_path = os.path.join(base_dir, "column_config.json")
+            if os.path.exists(config_path):
+                zipf.write(config_path, arcname="column_config.json")
+
     def do_backup_default(self):
         try:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"purchase_{timestamp}.db"
+            filename = f"purchase_{timestamp}.zip"
             target_path = os.path.join(self.backup_dir, filename)
             
-            shutil.copyfile(database.DB_PATH, target_path)
-            QMessageBox.information(self, "成功", f"备份已创建：\n{filename}")
+            self._create_backup_zip(target_path)
+            
+            QMessageBox.information(self, "成功", f"备份已创建：\n{filename}\n(包含数据库与附件)")
             self.load_backups()
         except Exception as e:
             QMessageBox.critical(self, "错误", f"备份失败: {str(e)}")
@@ -183,10 +207,10 @@ class DataManagerWidget(QWidget):
     def do_backup_export(self):
         try:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_name = f"purchase_backup_{timestamp}.db"
-            target_path, _ = QFileDialog.getSaveFileName(self, "导出备份", default_name, "SQLite Database (*.db)")
+            default_name = f"purchase_backup_{timestamp}.zip"
+            target_path, _ = QFileDialog.getSaveFileName(self, "导出备份", default_name, "Backup Archive (*.zip)")
             if target_path:
-                shutil.copyfile(database.DB_PATH, target_path)
+                self._create_backup_zip(target_path)
                 QMessageBox.information(self, "成功", "备份导出成功！")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导出失败: {str(e)}")
@@ -203,7 +227,7 @@ class DataManagerWidget(QWidget):
         reply = QMessageBox.warning(
             self, 
             "危险操作", 
-            "还原数据将覆盖当前所有数据且不可撤销！\n\n系统将在还原前自动创建一个临时备份。\n\n确定要继续吗？",
+            "还原数据将覆盖当前所有数据（包括附件）且不可撤销！\n\n系统将在还原前自动创建一个临时备份。\n\n确定要继续吗？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -212,7 +236,7 @@ class DataManagerWidget(QWidget):
             self.perform_restore(source_path)
 
     def do_restore_external(self):
-        source_path, _ = QFileDialog.getOpenFileName(self, "选择备份文件", "", "SQLite Database (*.db)")
+        source_path, _ = QFileDialog.getOpenFileName(self, "选择备份文件", "", "Backup Archive (*.zip);;SQLite Database (*.db)")
         if source_path:
             self.confirm_restore(source_path)
 
@@ -220,15 +244,33 @@ class DataManagerWidget(QWidget):
         try:
             # 1. Safety Backup
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            safety_backup = os.path.join(self.backup_dir, f"auto_backup_before_restore_{timestamp}.db")
-            shutil.copyfile(database.DB_PATH, safety_backup)
+            # Always make a zip backup for safety now, to preserve current state fully
+            safety_backup = os.path.join(self.backup_dir, f"auto_backup_before_restore_{timestamp}.zip")
+            self._create_backup_zip(safety_backup)
             
-            # 2. Restore (Copy source to DB_PATH)
-            # We assume no other process is locking the DB.
-            # In a real heavy app we might need to close connections first, but here connections are short-lived per function.
-            shutil.copyfile(source_path, database.DB_PATH)
+            # 2. Restore Logic
+            app_dir = os.path.dirname(database.DB_PATH)
             
-            QMessageBox.information(self, "成功", "数据还原成功！\n\n为了确保数据正常加载，请重启软件。")
+            if source_path.lower().endswith(".zip"):
+                with zipfile.ZipFile(source_path, 'r') as zipf:
+                    # Validate
+                    if "purchase.db" not in zipf.namelist():
+                        raise Exception("无效的备份文件：缺少数据库文件 purchase.db")
+                    
+                    # Extract all (overwrite)
+                    zipf.extractall(app_dir)
+                    
+            else:
+                # Legacy .db restore
+                shutil.copyfile(source_path, database.DB_PATH)
+            
+            # 3. Migrate schema immediately to ensure compatibility with current version
+            try:
+                database.ensure_db()
+            except Exception as e:
+                print(f"Schema migration after restore failed: {e}")
+
+            QMessageBox.information(self, "成功", "数据还原成功！\n\n数据库结构已自动更新以兼容当前版本。\n为了防止界面显示异常，建议重启软件。")
             self.load_backups() # refresh list to show safety backup
             
         except Exception as e:

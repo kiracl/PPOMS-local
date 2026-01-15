@@ -15,6 +15,7 @@ from ui_recommendation import RecommendationWidget
 from ui_monthly_plan import MonthlyPlanWidget
 from ui_data_manager import DataManagerWidget
 from ui_plan_export import PlanExportWidget
+from ui_plan_search import PlanSearchWidget
 from ui_contract import ContractManagerWidget
 from ui_inbound import InboundManagerWidget
 import database
@@ -24,7 +25,7 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.3.0168")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.3.0618")
         
         # Main Container
         container = QWidget()
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("采购计划")
         self.sidebar.addItem("计划发放")
         self.sidebar.addItem("计划导出")
+        self.sidebar.addItem("计划检索")
         self.sidebar.addItem("自动推荐")
         self.sidebar.addItem("合同管理")
         self.sidebar.addItem("入库管理")
@@ -99,7 +101,11 @@ class MainWindow(QMainWindow):
         self.plan_export = PlanExportWidget()
         self.right_stack.addWidget(self.plan_export)
         
-        # 6. Recommendation Page (Index 5)
+        # 5.5 Plan Search Page (Index 5)
+        self.plan_search = PlanSearchWidget()
+        self.right_stack.addWidget(self.plan_search)
+        
+        # 6. Recommendation Page (Index 6)
         self.recommendation = RecommendationWidget()
         self.right_stack.addWidget(self.recommendation)
         
@@ -165,11 +171,15 @@ class MainWindow(QMainWindow):
             self.plan_release.load_data()
         elif index == 4:
             self.plan_export.load_months()
+        elif index == 5:
+            self.plan_search.load_data()
         elif index == 6:
-            self.contract_manager.load_data()
+            self.recommendation.load_data()
         elif index == 7:
-            self.inbound_manager.load_history()
+            self.contract_manager.load_data()
         elif index == 8:
+            self.inbound_manager.load_history()
+        elif index == 9:
             self.data_manager.load_backups()
 
     def get_display_name(self, path):
@@ -629,6 +639,9 @@ def main():
     w.showMaximized()
     sys.exit(app.exec())
 
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

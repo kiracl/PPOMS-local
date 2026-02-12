@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Data>
+<OutInvoice>
+    <Kpxx>
+        <Fplx>增值税专用发票</Fplx>
+        <Fphm>12345678</Fphm>
+        <Kprq>20230101</Kprq>
+        <Xsf_Mc>Test Seller</Xsf_Mc>
+        <Jshj>1130.00</Jshj>
+    </Kpxx>
+</OutInvoice>
+</Data>

@@ -10,6 +10,8 @@ import openpyxl
 from datetime import datetime
 
 class PlanSearchWidget(QWidget):
+    request_open_detail = Signal(str)
+
     def __init__(self):
         super().__init__()
         self.page = 1
@@ -94,6 +96,7 @@ class PlanSearchWidget(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
         
         # Sorting
         self.table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
@@ -115,6 +118,16 @@ class PlanSearchWidget(QWidget):
         page_layout.addStretch()
         
         layout.addLayout(page_layout)
+
+    def on_cell_double_clicked(self, row, column):
+        # Column 1 is "主单编号"
+        item = self.table.item(row, 1)
+        if item:
+            number = item.text().strip()
+            if number:
+                self.request_open_detail.emit(number)
+            else:
+                QMessageBox.warning(self, "提示", "该记录没有主单编号，无法跳转")
 
     def load_demand_units(self):
         units = database.fetch_units()

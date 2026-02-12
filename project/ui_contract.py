@@ -651,6 +651,91 @@ class ContractListWidget(QWidget):
         self.open_contract_signal.emit(cid, cno, name)
 
 
+class PurchPlanSelector(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择采购计划")
+        self.resize(800, 500)
+        self.selected_no = None
+        self.init_ui()
+        self.load_data()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Filter
+        filter_layout = QHBoxLayout()
+        self.filter_text = QLineEdit()
+        self.filter_text.setPlaceholderText("输入单号、任务名称或单位进行搜索...")
+        self.filter_text.textChanged.connect(self.load_data)
+        filter_layout.addWidget(self.filter_text)
+        layout.addLayout(filter_layout)
+        
+        # List
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["采购单号", "任务名称", "单位", "日期", "类别"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.itemDoubleClicked.connect(self.on_item_double_clicked)
+        layout.addWidget(self.table)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("确定")
+        btn_ok.clicked.connect(self.on_ok)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_cancel)
+        btn_layout.addWidget(btn_ok)
+        layout.addLayout(btn_layout)
+
+    def load_data(self):
+        text = self.filter_text.text().strip()
+        # Using database.fetch_orders(number_filter=...)
+        # fetch_orders signature: number_filter, task_filter, unit_filter, month_filter
+        # We want to search across multiple fields with one text
+        # database.fetch_orders currently does strict AND. 
+        # Let's use a specialized fetch or modify fetch_orders.
+        # Let's use fetch_orders but try to pass text to multiple filters? No, that's AND.
+        # We need OR logic for search bar.
+        # Let's fetch all (or limit) and filter in Python if result set is small, 
+        # OR add a new DB function `search_orders_fuzzy`.
+        
+        # For better performance, let's use a new DB function.
+        orders = database.search_orders_fuzzy(text)
+        
+        self.table.setRowCount(0)
+        for row in orders:
+            # row: number, task_name, unit, date, category
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            self.table.setItem(r, 0, QTableWidgetItem(row[0]))
+            self.table.setItem(r, 1, QTableWidgetItem(row[1]))
+            self.table.setItem(r, 2, QTableWidgetItem(row[2]))
+            self.table.setItem(r, 3, QTableWidgetItem(row[3]))
+            
+            cat_name = database.category_display_from_code(row[4])
+            self.table.setItem(r, 4, QTableWidgetItem(cat_name))
+
+    def on_item_double_clicked(self, item):
+        self.on_ok()
+
+    def on_ok(self):
+        row = self.table.currentRow()
+        if row >= 0:
+            self.selected_no = self.table.item(row, 0).text()
+            self.accept()
+        else:
+            QMessageBox.warning(self, "提示", "请先选择一条记录")
+
+    def get_selected(self):
+        return self.selected_no
+
+
 class ContractOrderWidget(QWidget):
     back_signal = Signal()
 
@@ -659,9 +744,19 @@ class ContractOrderWidget(QWidget):
         self.contract_id = contract_id
         self.contract_no = contract_no
         self.contract_name = contract_name
+        
+        self.specs_map = {} # ID -> (Model, Unit, Price, Remaining)
+        self.spec_items = [] # List of (ID, DisplayText) for combos
+        
+        self.original_order_ids = set() # Track IDs loaded for editing
+
         self.init_ui()
+        self.load_specs_data()
         self.load_orders()
         self.restore_column_widths()
+        
+        # Initial empty row
+        self.add_input_row()
 
     def restore_column_widths(self):
         config = load_column_config()
@@ -670,6 +765,13 @@ class ContractOrderWidget(QWidget):
             for col, width in widths.items():
                 if width > 0:
                     self.table.setColumnWidth(int(col), width)
+                    
+        # Input Table Widths
+        if "order_input_table" in config:
+            widths = config["order_input_table"]
+            for col, width in widths.items():
+                if width > 0:
+                    self.input_table.setColumnWidth(int(col), width)
 
     def save_table_widths(self, *args):
         config = load_column_config()
@@ -679,10 +781,18 @@ class ContractOrderWidget(QWidget):
         config["order_list"] = widths
         save_column_config(config)
 
+    def save_input_table_widths(self, *args):
+        config = load_column_config()
+        widths = {}
+        for i in range(self.input_table.columnCount()):
+            widths[str(i)] = self.input_table.columnWidth(i)
+        config["order_input_table"] = widths
+        save_column_config(config)
+
     def init_ui(self):
         layout = QVBoxLayout(self)
         
-        # 1. Top Bar
+        # --- 1. Top Bar ---
         top_bar = QHBoxLayout()
         self.btn_back = QPushButton("返回")
         self.btn_back.setFixedSize(80, 40)
@@ -694,84 +804,89 @@ class ContractOrderWidget(QWidget):
         top_bar.addWidget(self.btn_back)
         top_bar.addWidget(title_lbl)
         top_bar.addStretch()
-        
         layout.addLayout(top_bar)
         
-        # 2. Entry Form
-        form_group = QGroupBox("新增订单")
-        form_layout = QGridLayout(form_group)
+        # --- 2. Batch Entry Area ---
+        entry_group = QGroupBox("批量新增/编辑订单")
+        entry_layout = QVBoxLayout(entry_group)
         
+        # 2.1 Common Header Fields
+        header_grid = QGridLayout()
         self.date_edit = QDateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        
         self.order_no = QLineEdit()
-        self.order_no.setPlaceholderText("订单编号")
+        self.order_no.setPlaceholderText("订单编号 (批量应用)")
         
         self.sales_no = QLineEdit()
         self.prod_no = QLineEdit()
+        
+        # Purch Plan Selector
         self.purch_no = QLineEdit()
+        self.purch_no.setPlaceholderText("双击选择采购计划")
+        self.purch_no.mouseDoubleClickEvent = self.open_purch_plan_selector
         
-        self.spec_combo = QComboBox()
-        self.spec_combo.currentIndexChanged.connect(self.on_spec_selected)
-        self.specs_map = {} # ID -> (Model, Unit, Price, Remaining)
+        header_grid.addWidget(QLabel("日期:"), 0, 0)
+        header_grid.addWidget(self.date_edit, 0, 1)
+        header_grid.addWidget(QLabel("订单编号:"), 0, 2)
+        header_grid.addWidget(self.order_no, 0, 3)
+        header_grid.addWidget(QLabel("销售单号:"), 0, 4)
+        header_grid.addWidget(self.sales_no, 0, 5)
         
-        self.unit_lbl = QLabel("单位")
-        self.qty_spin = QDoubleSpinBox()
-        self.qty_spin.setRange(0, 99999999)
-        self.qty_spin.valueChanged.connect(self.calc_total)
+        header_grid.addWidget(QLabel("生产单号:"), 1, 0)
+        header_grid.addWidget(self.prod_no, 1, 1)
+        header_grid.addWidget(QLabel("采购计划:"), 1, 2)
+        header_grid.addWidget(self.purch_no, 1, 3)
         
-        self.price_spin = QDoubleSpinBox()
-        self.price_spin.setRange(0, 99999999)
-        self.price_spin.valueChanged.connect(self.calc_total)
+        entry_layout.addLayout(header_grid)
         
-        self.total_lbl = QLabel("0.00")
+        # 2.2 Toolbar
+        tool_layout = QHBoxLayout()
+        btn_add_row = QPushButton("添加行")
+        btn_add_row.clicked.connect(lambda: self.add_input_row())
         
-        self.remarks = QLineEdit()
+        btn_import = QPushButton("导入模板")
+        btn_import.clicked.connect(self.import_template)
         
-        # Load specs after UI elements are created
-        self.load_specs_combo()
+        btn_clear = QPushButton("清空录入")
+        btn_clear.clicked.connect(self.clear_entry_form)
         
-        btn_add = QPushButton("添加记录")
-        btn_add.setObjectName("primary")
-        btn_add.clicked.connect(self.save_order)
+        tool_layout.addWidget(btn_add_row)
+        tool_layout.addWidget(btn_import)
+        tool_layout.addWidget(btn_clear)
+        tool_layout.addStretch()
         
-        form_layout.addWidget(QLabel("日期"), 0, 0)
-        form_layout.addWidget(self.date_edit, 0, 1)
-        form_layout.addWidget(QLabel("订单编号"), 0, 2)
-        form_layout.addWidget(self.order_no, 0, 3)
+        entry_layout.addLayout(tool_layout)
         
-        form_layout.addWidget(QLabel("销售单号"), 1, 0)
-        form_layout.addWidget(self.sales_no, 1, 1)
-        form_layout.addWidget(QLabel("生产单号"), 1, 2)
-        form_layout.addWidget(self.prod_no, 1, 3)
-        form_layout.addWidget(QLabel("采购计划"), 1, 4)
-        form_layout.addWidget(self.purch_no, 1, 5)
+        # 2.3 Input Table
+        self.input_table = QTableWidget()
+        self.input_table.setColumnCount(8) 
+        # Columns: Spec, Unit, Qty, Price, Total, Remark, Action, HIDDEN_ID
+        self.input_table.setHorizontalHeaderLabels(["规格型号*", "单位", "数量*", "单价*", "总价", "备注", "操作", "ID"])
+        self.input_table.setColumnHidden(7, True) # Hidden ID
+        self.input_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.input_table.horizontalHeader().setStretchLastSection(True)
+        self.input_table.horizontalHeader().sectionResized.connect(self.save_input_table_widths)
+        self.input_table.setMinimumHeight(200)
+        entry_layout.addWidget(self.input_table)
         
-        form_layout.addWidget(QLabel("规格型号"), 2, 0)
-        form_layout.addWidget(self.spec_combo, 2, 1)
-        form_layout.addWidget(QLabel("单位"), 2, 2)
-        form_layout.addWidget(self.unit_lbl, 2, 3)
-        form_layout.addWidget(QLabel("数量"), 2, 4)
-        form_layout.addWidget(self.qty_spin, 2, 5)
+        # 2.4 Save Button
+        self.btn_save_all = QPushButton("保存所有记录")
+        self.btn_save_all.setObjectName("primary")
+        self.btn_save_all.setMinimumHeight(40)
+        self.btn_save_all.clicked.connect(self.save_batch_orders)
+        entry_layout.addWidget(self.btn_save_all)
         
-        form_layout.addWidget(QLabel("单价"), 3, 0)
-        form_layout.addWidget(self.price_spin, 3, 1)
-        form_layout.addWidget(QLabel("总价"), 3, 2)
-        form_layout.addWidget(self.total_lbl, 3, 3)
-        form_layout.addWidget(QLabel("备注"), 3, 4)
-        form_layout.addWidget(self.remarks, 3, 5)
+        layout.addWidget(entry_group)
         
-        form_layout.addWidget(btn_add, 4, 5)
-        
-        layout.addWidget(form_group)
-        
-        # 3. Filter Area
+        # --- 3. Filter Area ---
         filter_group = QGroupBox("筛选查询")
         filter_layout = QHBoxLayout(filter_group)
         filter_layout.setContentsMargins(10, 5, 10, 5)
         
         self.filter_no = QLineEdit()
-        self.filter_no.setPlaceholderText("订单号")
+        self.filter_no.setPlaceholderText("订单编号")
         self.filter_no.textChanged.connect(self.load_orders)
         
         self.filter_spec = QLineEdit()
@@ -800,7 +915,7 @@ class ContractOrderWidget(QWidget):
         self.filter_date_start.dateChanged.connect(self.load_orders)
         self.filter_date_end.dateChanged.connect(self.load_orders)
         
-        filter_layout.addWidget(QLabel("订单号:"))
+        filter_layout.addWidget(QLabel("订单编号:"))
         filter_layout.addWidget(self.filter_no)
         filter_layout.addWidget(QLabel("规格:"))
         filter_layout.addWidget(self.filter_spec)
@@ -809,10 +924,10 @@ class ContractOrderWidget(QWidget):
         
         layout.addWidget(filter_group)
         
-        # 4. List
+        # --- 4. List ---
         self.table = QTableWidget()
         self.table.setColumnCount(13)
-        self.table.setHorizontalHeaderLabels(["ID", "日期", "单号", "规格", "数量", "单价", "总价", "销售单", "生产单", "采购单", "状态", "备注", "Spec_ID"])
+        self.table.setHorizontalHeaderLabels(["ID", "日期", "订单编号", "规格", "数量", "单价", "总价", "销售单", "生产单", "采购计划单号", "状态", "备注", "Spec_ID"])
         self.table.setColumnHidden(0, True)
         self.table.setColumnHidden(12, True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -830,13 +945,301 @@ class ContractOrderWidget(QWidget):
         btn_del.clicked.connect(self.delete_order)
         layout.addWidget(btn_del)
 
+    def open_purch_plan_selector(self, event):
+        dialog = PurchPlanSelector(self)
+        if dialog.exec() == QDialog.Accepted:
+            selected = dialog.get_selected()
+            if selected:
+                self.purch_no.setText(selected)
+
+    def load_specs_data(self):
+        specs = database.fetch_contract_specs(self.contract_id)
+        self.specs_map = {}
+        self.spec_items = []
+        for sp in specs:
+            # id, model, unit, qty, price, total, exec
+            sid, model, unit, qty, price, total, exec_qty = sp
+            rem = qty - exec_qty
+            label = f"{model} (余: {rem})"
+            self.spec_items.append((sid, label))
+            self.specs_map[sid] = (model, unit, price, rem)
+            
+        # Refresh combos in input table if any
+        for row in range(self.input_table.rowCount()):
+            combo = self.input_table.cellWidget(row, 0)
+            if isinstance(combo, QComboBox):
+                current_sid = combo.currentData()
+                combo.blockSignals(True)
+                combo.clear()
+                for sid, label in self.spec_items:
+                    combo.addItem(label, sid)
+                if current_sid:
+                    index = combo.findData(current_sid)
+                    if index >= 0:
+                        combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+
+    def add_input_row(self, spec_id=None, qty=0, price=0, remark="", oid=None, status="新增"):
+        row = self.input_table.rowCount()
+        self.input_table.insertRow(row)
+        
+        # 0: Spec Combo
+        combo = QComboBox()
+        combo.setEditable(True)
+        # Add items
+        for sid, label in self.spec_items:
+            combo.addItem(label, sid)
+        
+        if spec_id:
+            idx = combo.findData(spec_id)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        else:
+            combo.setCurrentIndex(-1)
+            
+        combo.currentIndexChanged.connect(lambda idx, r=row: self.on_row_spec_changed(r))
+        self.input_table.setCellWidget(row, 0, combo)
+        
+        # 1: Unit (ReadOnly)
+        unit_item = QTableWidgetItem("")
+        unit_item.setFlags(unit_item.flags() & ~Qt.ItemIsEditable)
+        self.input_table.setItem(row, 1, unit_item)
+        
+        # 2: Qty
+        sb_qty = QDoubleSpinBox()
+        sb_qty.setRange(-999999999.99, 999999999.99)
+        sb_qty.setGroupSeparatorShown(True)
+        sb_qty.setDecimals(2)
+        sb_qty.setValue(qty)
+        sb_qty.valueChanged.connect(lambda v, r=row: self.on_row_value_changed(r))
+        self.input_table.setCellWidget(row, 2, sb_qty)
+        
+        # 3: Price
+        sb_price = QDoubleSpinBox()
+        sb_price.setRange(-999999999.99, 999999999.99)
+        sb_price.setGroupSeparatorShown(True)
+        sb_price.setDecimals(2)
+        sb_price.setValue(price)
+        sb_price.valueChanged.connect(lambda v, r=row: self.on_row_value_changed(r))
+        self.input_table.setCellWidget(row, 3, sb_price)
+        
+        # 4: Total (ReadOnly)
+        total_item = QTableWidgetItem("0.00")
+        total_item.setFlags(total_item.flags() & ~Qt.ItemIsEditable)
+        self.input_table.setItem(row, 4, total_item)
+        
+        # 5: Remark
+        remark_item = QTableWidgetItem(remark)
+        self.input_table.setItem(row, 5, remark_item)
+        
+        # 6: Action
+        btn_del = QPushButton("删除")
+        btn_del.setStyleSheet("color: red;")
+        # Pass button instance explicitly to avoid lambda capture issues or sender() ambiguity
+        btn_del.clicked.connect(lambda checked=False, btn=btn_del: self.delete_input_row(btn))
+        self.input_table.setCellWidget(row, 6, btn_del)
+        
+        # 7: ID (Hidden)
+        id_item = QTableWidgetItem(str(oid) if oid else "")
+        id_item.setData(Qt.UserRole, status)
+        self.input_table.setItem(row, 7, id_item)
+        
+        # Trigger updates
+        self.on_row_spec_changed(row)
+        self.on_row_value_changed(row)
+
+    def delete_input_row(self, btn_widget):
+        # Find which row contains the button widget
+        target_row = -1
+        
+        # Method 1: Use indexAt (more robust if widget is in layout)
+        # But setCellWidget places it directly.
+        # Check all rows
+        for r in range(self.input_table.rowCount()):
+            if self.input_table.cellWidget(r, 6) == btn_widget:
+                target_row = r
+                break
+        
+        if target_row >= 0:
+            self.input_table.removeRow(target_row)
+
+    def on_row_spec_changed(self, row_idx):
+        # Try to find row by sender to handle row shifts
+        sender = self.sender()
+        target_row = -1
+        
+        if sender:
+            for r in range(self.input_table.rowCount()):
+                if self.input_table.cellWidget(r, 0) == sender:
+                    target_row = r
+                    break
+        
+        # Fallback to provided row_idx (useful for tests or initial calls)
+        if target_row < 0:
+            target_row = row_idx
+            
+        if target_row < 0 or target_row >= self.input_table.rowCount():
+            return
+ 
+        combo = self.input_table.cellWidget(target_row, 0)
+        if not combo: return
+        
+        sid = combo.currentData()
+        
+        if sid in self.specs_map:
+            model, unit, price, rem = self.specs_map[sid]
+            # Update Unit
+            if self.input_table.item(target_row, 1):
+                self.input_table.item(target_row, 1).setText(unit)
+            
+            # Update Price (only if 0)
+            sb_price = self.input_table.cellWidget(target_row, 3)
+            if sb_price and sb_price.value() == 0:
+                sb_price.setValue(price)
+                
+        self.on_row_value_changed(target_row)
+
+    def on_row_value_changed(self, row_idx):
+        # Find row by sender
+        sender = self.sender()
+        target_row = -1
+        
+        if sender:
+            for r in range(self.input_table.rowCount()):
+                w2 = self.input_table.cellWidget(r, 2)
+                w3 = self.input_table.cellWidget(r, 3)
+                if w2 == sender or w3 == sender:
+                    target_row = r
+                    break
+        
+        if target_row < 0:
+            target_row = row_idx
+            
+        if target_row < 0 or target_row >= self.input_table.rowCount():
+            return
+            
+        sb_qty = self.input_table.cellWidget(target_row, 2)
+        sb_price = self.input_table.cellWidget(target_row, 3)
+        if not sb_qty or not sb_price: return
+        
+        total = sb_qty.value() * sb_price.value()
+        item_total = self.input_table.item(target_row, 4)
+        if item_total:
+            item_total.setText(f"{total:,.2f}")
+
+    def clear_entry_form(self):
+        self.date_edit.setDate(QDate.currentDate())
+        self.order_no.clear()
+        self.order_no.setReadOnly(False) # Unlock
+        self.sales_no.clear()
+        self.prod_no.clear()
+        self.purch_no.clear()
+        self.clear_input_rows()
+        self.original_order_ids.clear() # Reset tracked IDs
+        self.add_input_row() 
+
+    def clear_input_rows(self):
+        self.input_table.setRowCount(0)
+
+    def save_batch_orders(self):
+        common_order_no = self.order_no.text().strip()
+        common_sales = self.sales_no.text().strip()
+        common_prod = self.prod_no.text().strip()
+        common_purch = self.purch_no.text().strip()
+        date_str = self.date_edit.date().toString("yyyy-MM-dd")
+        
+        orders_to_save = []
+        current_ids = set()
+        
+        rows = self.input_table.rowCount()
+        if rows == 0:
+            return
+
+        for r in range(rows):
+            combo = self.input_table.cellWidget(r, 0)
+            if not combo: continue
+            sid = combo.currentData()
+            if not sid:
+                continue 
+                
+            sb_qty = self.input_table.cellWidget(r, 2)
+            qty = sb_qty.value()
+                
+            sb_price = self.input_table.cellWidget(r, 3)
+            price = sb_price.value()
+            
+            item_remark = self.input_table.item(r, 5)
+            remark = item_remark.text() if item_remark else ""
+            
+            item_id = self.input_table.item(r, 7)
+            oid = int(item_id.text()) if item_id and item_id.text() else None
+            status = item_id.data(Qt.UserRole) or "新增"
+            
+            if oid:
+                current_ids.add(oid)
+            
+            order_data = {
+                'id': oid,
+                'contract_id': self.contract_id,
+                'spec_id': sid,
+                'order_date': date_str,
+                'order_no': common_order_no,
+                'sales_order': common_sales,
+                'prod_order': common_prod,
+                'purch_plan_no': common_purch,
+                'quantity': qty,
+                'unit_price': price,
+                'total_price': round(qty * price, 2),
+                'status': status,
+                'remarks': remark
+            }
+            orders_to_save.append(order_data)
+            
+        if not orders_to_save and not self.original_order_ids:
+            QMessageBox.warning(self, "提示", "没有有效的数据可保存")
+            return
+            
+        try:
+            # 1. Handle Deletions (IDs in original but not in current)
+            ids_to_delete = self.original_order_ids - current_ids
+            deleted_count = 0
+            for oid in ids_to_delete:
+                database.delete_contract_order(oid)
+                database.save_operation_log(common_order_no, "Order", str(oid), "Deleted", "User", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                deleted_count += 1
+            
+            # 2. Handle Upserts
+            saved_count = 0
+            for data in orders_to_save:
+                is_update = bool(data.get('id'))
+                database.save_contract_order(data)
+                
+                # Log
+                op_type = "Update" if is_update else "Insert"
+                database.save_operation_log(common_order_no, "Order", "", f"{op_type} Spec {data['spec_id']}", "User", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                
+                saved_count += 1
+                
+            msg = f"成功保存 {saved_count} 条记录"
+            if deleted_count > 0:
+                msg += f"\n删除了 {deleted_count} 条原有记录"
+                
+            QMessageBox.information(self, "成功", msg)
+            self.load_orders()
+            self.clear_entry_form()
+            
+            # Highlight modified row? We just refreshed. 
+            # Could try to find order_no and select.
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", str(e))
+
     def on_context_menu(self, pos):
         item = self.table.itemAt(pos)
         if not item:
             return
             
         row = item.row()
-        oid = int(self.table.item(row, 0).text())
         self.table.selectRow(row)
         
         menu = QMenu(self)
@@ -848,91 +1251,69 @@ class ContractOrderWidget(QWidget):
         if action == edit_action:
             self.edit_order(row)
         elif action == delete_action:
-            if QMessageBox.question(self, "确认", "确定删除选中记录？") == QMessageBox.Yes:
-                database.delete_contract_order(oid)
-                self.load_orders()
-                self.load_specs_combo()
+            self.delete_order()
 
-    def load_specs_combo(self):
-        self.spec_combo.blockSignals(True)
-        specs = database.fetch_contract_specs(self.contract_id)
-        self.spec_combo.clear()
-        self.specs_map = {}
-        for sp in specs:
-            # id, model, unit, qty, price, total, exec
-            sid, model, unit, qty, price, total, exec_qty = sp
-            rem = qty - exec_qty
-            label = f"{model} (余: {rem})"
-            self.spec_combo.addItem(label, sid)
-            self.specs_map[sid] = (model, unit, price, rem)
-        self.spec_combo.blockSignals(False)
+    def edit_order(self, row):
+        order_no = self.table.item(row, 2).text()
         
-        if self.spec_combo.count() > 0:
-            self.on_spec_selected()
-        else:
-            self.unit_lbl.setText("单位")
-            self.price_spin.setValue(0)
-            self.qty_spin.setValue(0)
-            self.total_lbl.setText("0.00")
+        # 1. Fetch all sibling orders
+        orders = database.fetch_contract_orders_by_no_exact(self.contract_id, order_no)
+        if not orders:
+            QMessageBox.warning(self, "错误", f"未找到订单 {order_no} 的详细信息")
+            return
+            
+        # 2. Populate Header (from first record)
+        first_order = orders[0]
+        # 0:id, 1:date, 2:no, 3:model, 4:qty, 5:price, 6:total, 
+        # 7:sales, 8:prod, 9:purch, 10:status, 11:remarks, 12:spec_id
+        
+        date_str = first_order[1]
+        qdate = QDate.fromString(date_str, "yyyy-MM-dd")
+        if qdate.isValid():
+            self.date_edit.setDate(qdate)
+            
+        self.order_no.setText(first_order[2])
+        self.sales_no.setText(first_order[7])
+        self.prod_no.setText(first_order[8])
+        self.purch_no.setText(first_order[9])
+        
+        # Lock Order No
+        self.order_no.setReadOnly(True)
+        
+        # 3. Populate Rows
+        self.clear_input_rows()
+        self.original_order_ids.clear()
+        
+        for order in orders:
+            oid = order[0]
+            spec_id = order[12]
+            qty = float(order[4] or 0)
+            price = float(order[5] or 0)
+            status = order[10] or "新增"
+            remark = order[11] or ""
+            
+            self.add_input_row(spec_id, qty, price, remark, oid, status)
+            self.original_order_ids.add(oid)
+        
+        QMessageBox.information(self, "提示", f"订单 {order_no} 的 {len(orders)} 条记录已加载。修改后点击保存。")
 
-    def on_spec_selected(self):
-        sid = self.spec_combo.currentData()
-        if sid in self.specs_map:
-            model, unit, price, rem = self.specs_map[sid]
-            self.unit_lbl.setText(unit)
-            self.price_spin.setValue(price)
-            self.qty_spin.setMaximum(99999999) 
-            self.calc_total()
-
-    def calc_total(self):
-        total = self.qty_spin.value() * self.price_spin.value()
-        self.total_lbl.setText(f"{total:.2f}")
-
-    def save_order(self):
-        sid = self.spec_combo.currentData()
-        if not sid:
+    def delete_order(self):
+        rows = sorted(set(index.row() for index in self.table.selectedIndexes()), reverse=True)
+        if not rows:
             return
         
-        qty = self.qty_spin.value()
-        rem = self.specs_map[sid][3]
-        
-        if qty > rem:
-            if QMessageBox.question(self, "警告", "数量超过剩余执行数量，确定继续吗？") != QMessageBox.Yes:
-                return
-                
-        try:
-            oid = getattr(self, 'current_editing_oid', None)
+        if QMessageBox.question(self, "确认", "确定删除选中记录？") != QMessageBox.Yes:
+            return
             
-            # Use rounded total price
-            total_price = round(qty * self.price_spin.value(), 2)
+        for row in rows:
+            oid = int(self.table.item(row, 0).text())
+            database.delete_contract_order(oid)
             
-            # Get status if editing
-            status = '新增'
-            if oid:
-                status = getattr(self, 'current_editing_status', '新增')
-            
-            order_data = {
-                'id': oid,
-                'contract_id': self.contract_id,
-                'spec_id': sid,
-                'order_date': self.date_edit.date().toString("yyyy-MM-dd"),
-                'order_no': self.order_no.text(),
-                'sales_order': self.sales_no.text(),
-                'prod_order': self.prod_no.text(),
-                'purch_plan_no': self.purch_no.text(),
-                'quantity': qty,
-                'unit_price': self.price_spin.value(),
-                'total_price': total_price,
-                'status': status,
-                'remarks': self.remarks.text()
-            }
-            database.save_contract_order(order_data)
-            QMessageBox.information(self, "成功", "订单保存成功")
-            self.load_orders()
-            self.load_specs_combo() 
-            self.clear_form()
-        except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+        self.load_orders()
+
+    def import_template(self):
+        # Simple implementation
+        QMessageBox.information(self, "功能", "请使用Excel模板导入数据（待实现）")
 
     def load_orders(self):
         self.table.setRowCount(0)
@@ -953,7 +1334,6 @@ class ContractOrderWidget(QWidget):
             filter_spec=f_spec
         )
         
-        # Sort in Python to handle mixed date formats
         def parse_date_sort(row):
             d_str = row[1]
             if not d_str: return datetime.min
@@ -975,9 +1355,19 @@ class ContractOrderWidget(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(str(row_data[1])))
             self.table.setItem(row, 2, QTableWidgetItem(str(row_data[2])))
             self.table.setItem(row, 3, QTableWidgetItem(str(row_data[3]))) 
-            self.table.setItem(row, 4, QTableWidgetItem(str(row_data[4]))) 
-            self.table.setItem(row, 5, QTableWidgetItem(str(row_data[5]))) 
-            self.table.setItem(row, 6, QTableWidgetItem(str(row_data[6]))) 
+            
+            # Format Quantity
+            qty_val = float(str(row_data[4]) or 0)
+            self.table.setItem(row, 4, QTableWidgetItem(f"{qty_val:,.2f}")) 
+            
+            # Format Price
+            price_val = float(str(row_data[5]) or 0)
+            self.table.setItem(row, 5, QTableWidgetItem(f"{price_val:,.2f}")) 
+            
+            # Format Total
+            total_val = float(str(row_data[6]) or 0)
+            self.table.setItem(row, 6, QTableWidgetItem(f"{total_val:,.2f}")) 
+            
             self.table.setItem(row, 7, QTableWidgetItem(str(row_data[7])))
             self.table.setItem(row, 8, QTableWidgetItem(str(row_data[8])))
             self.table.setItem(row, 9, QTableWidgetItem(str(row_data[9])))
@@ -991,69 +1381,7 @@ class ContractOrderWidget(QWidget):
             self.table.setItem(row, 10, status_item)
             
             self.table.setItem(row, 11, QTableWidgetItem(str(row_data[11]))) 
-            self.table.setItem(row, 12, QTableWidgetItem(str(row_data[12]))) 
-
-    def edit_order(self, row):
-        oid = int(self.table.item(row, 0).text())
-        
-        date_str = self.table.item(row, 1).text()
-        qdate = QDate()
-        if date_str:
-            for fmt in ("yyyy-MM-dd", "M/d/yyyy", "yyyy/MM/dd"):
-                qdate = QDate.fromString(date_str, fmt)
-                if qdate.isValid():
-                    break
-        
-        self.date_edit.setDate(qdate if qdate.isValid() else QDate.currentDate())
-        
-        self.order_no.setText(self.table.item(row, 2).text())
-        self.sales_no.setText(self.table.item(row, 7).text())
-        self.prod_no.setText(self.table.item(row, 8).text())
-        self.purch_no.setText(self.table.item(row, 9).text())
-        self.remarks.setText(self.table.item(row, 11).text())
-        
-        self.current_editing_status = self.table.item(row, 10).text()
-        
-        spec_id = int(self.table.item(row, 12).text())
-        
-        index = self.spec_combo.findData(spec_id)
-        if index >= 0:
-            self.spec_combo.setCurrentIndex(index)
-            
-        qty = float(self.table.item(row, 4).text())
-        price = float(self.table.item(row, 5).text())
-        
-        self.qty_spin.setValue(qty)
-        self.price_spin.setValue(price)
-        
-        self.current_editing_oid = oid
-        self.findChild(QPushButton, "primary").setText("更新记录")
-
-    def clear_form(self):
-        self.qty_spin.setValue(0)
-        self.order_no.clear()
-        self.sales_no.clear()
-        self.prod_no.clear()
-        self.purch_no.clear()
-        self.remarks.clear()
-        self.current_editing_oid = None
-        self.current_editing_status = None
-        self.findChild(QPushButton, "primary").setText("添加记录")
-
-    def delete_order(self):
-        rows = sorted(set(index.row() for index in self.table.selectedIndexes()), reverse=True)
-        if not rows:
-            return
-        
-        if QMessageBox.question(self, "确认", "确定删除选中记录？") != QMessageBox.Yes:
-            return
-            
-        for row in rows:
-            oid = int(self.table.item(row, 0).text())
-            database.delete_contract_order(oid)
-            
-        self.load_orders()
-        self.load_specs_combo()
+            self.table.setItem(row, 12, QTableWidgetItem(str(row_data[12])))
 
 
 class ContractManagerWidget(QWidget):

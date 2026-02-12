@@ -372,10 +372,16 @@ def _migrate_schema(conn: sqlite3.Connection):
             actual_status TEXT,
             purchase_body TEXT,
             add_adjust TEXT,
-            remark TEXT
+            remark TEXT,
+            audit_price TEXT
         )
         """
     )
+    # Check if audit_price exists in order_details
+    cur.execute("PRAGMA table_info(order_details)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "audit_price" not in cols:
+        cur.execute("ALTER TABLE order_details ADD COLUMN audit_price TEXT")
     conn.commit()
 
     cur.execute(
@@ -572,10 +578,16 @@ def _migrate_schema(conn: sqlite3.Connection):
             inbound_date TEXT,
             operator TEXT,
             create_time TEXT,
-            remarks TEXT
+            remarks TEXT,
+            invoice_id INTEGER
         )
-        """
+    """
     )
+    # Check for invoice_id (migration)
+    cur.execute("PRAGMA table_info(inbound_orders)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "invoice_id" not in cols:
+        cur.execute("ALTER TABLE inbound_orders ADD COLUMN invoice_id INTEGER")
     conn.commit()
 
     cur.execute(
@@ -586,8 +598,69 @@ def _migrate_schema(conn: sqlite3.Connection):
             seq INTEGER NOT NULL,
             PRIMARY KEY (date_str, category)
         )
-        """
+    """
     )
+    conn.commit()
+
+    # --- Invoice Management Tables ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT,
+            invoice_code TEXT,
+            invoice_number TEXT,
+            date TEXT,
+            seller_name TEXT,
+            seller_tax_id TEXT,
+            buyer_name TEXT,
+            buyer_tax_id TEXT,
+            amount_excluding_tax REAL,
+            tax_amount REAL,
+            total_amount REAL,
+            status TEXT DEFAULT '新增',
+            material_inbound_no TEXT,
+            file_path TEXT,
+            created_at TEXT,
+            remarks TEXT,
+            invoice_type TEXT,
+            UNIQUE(invoice_code, invoice_number)
+        )
+    """
+    )
+    # Check for invoice_type column
+    cur.execute("PRAGMA table_info(invoices)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "invoice_type" not in cols:
+        cur.execute("ALTER TABLE invoices ADD COLUMN invoice_type TEXT")
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS invoice_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_id INTEGER,
+            item_name TEXT,
+            spec_model TEXT,
+            unit TEXT,
+            quantity REAL,
+            unit_price REAL,
+            amount REAL,
+            tax_rate REAL,
+            tax_amount REAL,
+            inbound_id INTEGER,
+            inbound_no TEXT,
+            FOREIGN KEY(invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+        )
+    """
+    )
+    # Check for inbound_id/inbound_no columns
+    cur.execute("PRAGMA table_info(invoice_items)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "inbound_id" not in cols:
+        cur.execute("ALTER TABLE invoice_items ADD COLUMN inbound_id INTEGER")
+    if "inbound_no" not in cols:
+        cur.execute("ALTER TABLE invoice_items ADD COLUMN inbound_no TEXT")
     conn.commit()
 
     # --- Contract Management Tables ---
@@ -1808,6 +1881,246 @@ def delete_inbound_order(inbound_id):
     finally:
         conn.close()
 
+def fetch_contract_orders_grouped(filter_text=None):
+    """
+    Fetch contract orders grouped by Order No for Main Order Selection.
+    Returns list of dicts: order_no, contract_no, contract_name, purch_plan_no, total_qty, pending_qty
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # 1. Get all contract orders grouped by order_no
+        # Join with contracts
+        sql = """
+            SELECT 
+                co.order_no, 
+                MAX(c.contract_number), 
+                MAX(c.name), 
+                MAX(co.purch_plan_no),
+                SUM(co.quantity),
+                MAX(co.order_date)
+            FROM contract_orders co
+            JOIN contracts c ON co.contract_id = c.id
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (co.order_no LIKE ? OR c.contract_number LIKE ? OR c.name LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 3)
+            
+        sql += " GROUP BY co.order_no ORDER BY co.order_date DESC"
+        
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        
+        # 2. Calculate inbound totals per order_no
+        # We need to query inbound_orders grouped by order_no
+        cur.execute("SELECT order_no, SUM(inbound_qty) FROM inbound_orders GROUP BY order_no")
+        inbound_map = {r[0]: r[1] for r in cur.fetchall()}
+        
+        results = []
+        for r in rows:
+            # order_no, contract_no, c_name, purch_no, total_qty, date
+            ono, cno, cname, pno, qty, date = r
+            qty = qty or 0
+            inbound = inbound_map.get(ono, 0)
+            pending = qty - inbound
+            
+            # Only show if there is pending quantity? Or show all?
+            # User might want to add more even if "completed" (e.g. extras)?
+            # But usually we show pending.
+            
+            results.append({
+                'order_no': ono,
+                'contract_no': cno,
+                'contract_name': cname,
+                'purch_plan_no': pno,
+                'total_qty': qty,
+                'pending_qty': pending,
+                'date': date
+            })
+            
+        return results
+    finally:
+        conn.close()
+
+def fetch_specs_by_order_no(order_no):
+    """
+    Fetch all specifications for a given order number.
+    Returns list of dicts with spec details and individual pending quantities.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        sql = """
+            SELECT 
+                co.id, co.contract_id, co.spec_id, cs.spec_model, cs.unit, 
+                co.quantity, co.unit_price, co.total_price
+            FROM contract_orders co
+            LEFT JOIN contract_specs cs ON co.spec_id = cs.id
+            WHERE co.order_no = ?
+        """
+        cur.execute(sql, (order_no,))
+        rows = cur.fetchall()
+        
+        # Get inbound qty per contract_order_id
+        cur.execute("SELECT contract_order_id, SUM(inbound_qty) FROM inbound_orders WHERE order_no=? GROUP BY contract_order_id", (order_no,))
+        inbound_map = {r[0]: r[1] for r in cur.fetchall()}
+        
+        results = []
+        for r in rows:
+            # id, cid, sid, model, unit, qty, price, total
+            oid, cid, sid, model, unit, qty, price, total = r
+            qty = qty or 0
+            inbound = inbound_map.get(oid, 0)
+            pending = qty - inbound
+            
+            results.append({
+                'contract_order_id': oid,
+                'contract_id': cid,
+                'spec_id': sid,
+                'spec_model': model,
+                'unit': unit,
+                'order_qty': qty,
+                'unit_price': price,
+                'total_price': total,
+                'inbound_total': inbound,
+                'pending_qty': pending
+            })
+            
+        return results
+    finally:
+        conn.close()
+
+def check_warehouse_no_unique(warehouse_no):
+    """
+    Check if warehouse_no already exists. Returns True if UNIQUE (not found), False if EXISTS.
+    """
+    if not warehouse_no: return True
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM inbound_orders WHERE warehouse_no=?", (warehouse_no,))
+        return cur.fetchone() is None
+    finally:
+        conn.close()
+
+def fetch_inbound_orders_extended(filter_text=None):
+    """
+    Fetch inbound orders with price info.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Join with contract_orders to get price
+        sql = """
+            SELECT 
+                io.id, io.inbound_no, io.inbound_date, io.contract_no, io.order_no, io.purch_plan_no, 
+                io.spec_model, io.order_qty, io.inbound_qty, io.warehouse_no, io.remarks,
+                co.unit_price, io.operator
+            FROM inbound_orders io
+            LEFT JOIN contract_orders co ON io.contract_order_id = co.id
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (io.inbound_no LIKE ? OR io.contract_no LIKE ? OR io.order_no LIKE ? OR io.warehouse_no LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 4)
+            
+        sql += " ORDER BY io.inbound_date DESC, io.id DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def upsert_inbound_order_batch(records: list):
+    """
+    records: list of dicts with fields matching inbound_orders.
+    Uses inbound_no as the key.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        success_count = 0
+        update_count = 0
+        errors = []
+        
+        for i, rec in enumerate(records):
+            inbound_no = rec.get('inbound_no')
+            if not inbound_no:
+                errors.append(f"第 {i+2} 行: 入库单号不能为空")
+                continue
+            
+            # Check if exists
+            cur.execute("SELECT id, contract_order_id FROM inbound_orders WHERE inbound_no=?", (inbound_no,))
+            row = cur.fetchone()
+            
+            if row:
+                # Update
+                cur.execute(
+                    """
+                    UPDATE inbound_orders SET 
+                        inbound_date=?, inbound_qty=?, warehouse_no=?, remarks=?, operator=?
+                    WHERE id=?
+                    """,
+                    (
+                        rec.get('inbound_date'), rec.get('inbound_qty'), 
+                        rec.get('warehouse_no'), rec.get('remarks'), 
+                        rec.get('operator'), row[0]
+                    )
+                )
+                update_count += 1
+                _update_contract_order_status(cur, row[1])
+            else:
+                # Insert - We need contract_order_id to insert correctly.
+                # If it's not provided in the import, we try to find it by order_no and spec_model
+                order_no = rec.get('order_no')
+                spec_model = rec.get('spec_model')
+                
+                cur.execute(
+                    """
+                    SELECT co.id, co.contract_id, c.contract_number 
+                    FROM contract_orders co
+                    JOIN contracts c ON co.contract_id = c.id
+                    JOIN contract_specs cs ON co.spec_id = cs.id
+                    WHERE co.order_no=? AND cs.spec_model=?
+                    """,
+                    (order_no, spec_model)
+                )
+                link = cur.fetchone()
+                
+                if not link:
+                    errors.append(f"第 {i+2} 行: 无法匹配订单编号 '{order_no}' 和规格型号 '{spec_model}'")
+                    continue
+                
+                contract_order_id = link[0]
+                contract_no = link[2]
+                
+                cur.execute(
+                    """
+                    INSERT INTO inbound_orders(
+                        inbound_no, contract_order_id, contract_no, order_no, 
+                        spec_model, inbound_qty, warehouse_no, inbound_date, 
+                        operator, create_time, remarks
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        inbound_no, contract_order_id, contract_no, order_no,
+                        spec_model, rec.get('inbound_qty'), rec.get('warehouse_no'),
+                        rec.get('inbound_date'), rec.get('operator'),
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rec.get('remarks')
+                    )
+                )
+                success_count += 1
+                _update_contract_order_status(cur, contract_order_id)
+        
+        conn.commit()
+        return success_count, update_count, errors
+    finally:
+        conn.close()
+
 def fetch_contract_orders_for_inbound(filter_text=None):
     # Returns list of pending orders suitable for inbound
     conn = _connect()
@@ -2199,6 +2512,25 @@ def fetch_contract_orders(contract_id, filter_no=None, date_from=None, date_to=N
             
         sql += " ORDER BY co.order_date DESC"
         cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_contract_orders_by_no_exact(contract_id, order_no):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                co.id, co.order_date, co.order_no, cs.spec_model, 
+                co.quantity, co.unit_price, co.total_price, 
+                co.sales_order, co.prod_order, co.purch_plan_no, 
+                co.status, co.remarks, co.spec_id
+            FROM contract_orders co
+            LEFT JOIN contract_specs cs ON co.spec_id = cs.id
+            WHERE co.contract_id=? AND co.order_no=?
+        """
+        cur.execute(sql, (contract_id, order_no))
         return cur.fetchall()
     finally:
         conn.close()
@@ -2598,6 +2930,30 @@ def user_has_permission(permission: str) -> bool:
     return True
 
 
+def search_orders_fuzzy(keyword):
+    """
+    Search orders by keyword matching number, task_name, or unit.
+    Returns list of (order_no, task_name, unit, create_date, category)
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        keyword = f"%{keyword}%"
+        sql = """
+            SELECT number, task_name, unit, date, category
+            FROM orders
+            WHERE number LIKE ? OR task_name LIKE ? OR unit LIKE ?
+            ORDER BY date DESC
+            LIMIT 50
+        """
+        
+        cur.execute(sql, (keyword, keyword, keyword))
+        results = cur.fetchall()
+        return results
+    finally:
+        conn.close()
+
 def get_order_inquiry_total(order_number: str) -> float:
     """
     Calculate total amount from inquiry_price column for a given order.
@@ -2851,7 +3207,7 @@ def fetch_monthly_details_for_export(yymm: str):
                 o.number, o.task_name, o.category, o.unit, o.date,
                 od.detail_no, od.item_name, od.purchase_item, od.spec_model, 
                 od.unit, od.purchase_qty, od.budget_wan, od.purchase_method, od.purchase_channel,
-                od.plan_release, od.inquiry_price, od.supplier, od.remark, od.plan_time
+                od.plan_release, od.inquiry_price, od.supplier, od.remark, od.plan_time, od.audit_price
             FROM order_details od
             JOIN orders o ON od.order_number = o.number
             WHERE o.yymm = ?
@@ -3008,6 +3364,19 @@ def import_plan_search_items(data_list):
     finally:
         conn.close()
 
+def update_order_detail_prices(order_number: str, detail_no: str, inquiry_price: str, audit_price: str) -> bool:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE order_details SET inquiry_price=?, audit_price=? WHERE order_number=? AND detail_no=?",
+            (inquiry_price, audit_price, order_number, detail_no)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
 def get_all_plan_search_items_for_export(filter_seq=None, filter_item=None, filter_order=None, filter_unit=None):
     conn = _connect()
     try:
@@ -3041,5 +3410,297 @@ def get_all_plan_search_items_for_export(filter_seq=None, filter_item=None, filt
         
         cur.execute(sql, params)
         return cur.fetchall()
+    finally:
+        conn.close()
+
+# --- Invoice Management Functions ---
+
+def save_invoice(data: dict, items: list) -> int:
+    """
+    data: dict of invoice header fields
+    items: list of dicts for invoice items
+    Returns invoice_id
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # Check if exists
+        cur.execute(
+            "SELECT id FROM invoices WHERE invoice_code=? AND invoice_number=?",
+            (data.get('invoice_code'), data.get('invoice_number'))
+        )
+        row = cur.fetchone()
+        
+        if row:
+            # Update
+            invoice_id = row[0]
+            cur.execute(
+                """
+                UPDATE invoices SET 
+                    date=?, seller_name=?, seller_tax_id=?, buyer_name=?, buyer_tax_id=?,
+                    amount_excluding_tax=?, tax_amount=?, total_amount=?, 
+                    remarks=?, invoice_type=?, file_path=?
+                WHERE id=?
+                """,
+                (
+                    data.get('date'), data.get('seller_name'), data.get('seller_tax_id'),
+                    data.get('buyer_name'), data.get('buyer_tax_id'),
+                    data.get('amount_excluding_tax'), data.get('tax_amount'), data.get('total_amount'),
+                    data.get('remarks'), data.get('invoice_type'), data.get('file_path'),
+                    invoice_id
+                )
+            )
+            # Delete old items
+            cur.execute("DELETE FROM invoice_items WHERE invoice_id=?", (invoice_id,))
+        else:
+            # Insert Invoice
+            cur.execute(
+                """
+                INSERT INTO invoices(
+                    uuid, invoice_code, invoice_number, date, 
+                    seller_name, seller_tax_id, buyer_name, buyer_tax_id,
+                    amount_excluding_tax, tax_amount, total_amount, 
+                    status, material_inbound_no, file_path, created_at, remarks, invoice_type
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    data.get('uuid'), data.get('invoice_code'), data.get('invoice_number'), data.get('date'),
+                    data.get('seller_name'), data.get('seller_tax_id'), data.get('buyer_name'), data.get('buyer_tax_id'),
+                    data.get('amount_excluding_tax'), data.get('tax_amount'), data.get('total_amount'),
+                    '新增', data.get('material_inbound_no'), data.get('file_path'), 
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get('remarks'), data.get('invoice_type')
+                )
+            )
+            invoice_id = cur.lastrowid
+        
+        # Insert Items
+        for item in items:
+            cur.execute(
+                """
+                INSERT INTO invoice_items(
+                    invoice_id, item_name, spec_model, unit, 
+                    quantity, unit_price, amount, tax_rate, tax_amount
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    invoice_id, item.get('item_name'), item.get('spec_model'), item.get('unit'),
+                    item.get('quantity'), item.get('unit_price'), item.get('amount'), 
+                    item.get('tax_rate'), item.get('tax_amount')
+                )
+            )
+            
+        conn.commit()
+        return invoice_id
+    finally:
+        conn.close()
+
+def fetch_invoices(filter_text=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                id, invoice_code, invoice_number, date, seller_name, 
+                total_amount, status, material_inbound_no, created_at, invoice_type
+            FROM invoices
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (invoice_number LIKE ? OR seller_name LIKE ? OR material_inbound_no LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 3)
+            
+        sql += " ORDER BY date DESC, id DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_invoice_items(invoice_id: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, item_name, spec_model, unit, quantity, unit_price, amount, tax_rate, tax_amount, inbound_id, inbound_no
+            FROM invoice_items
+            WHERE invoice_id=?
+            """,
+            (invoice_id,)
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def link_invoice_item_to_inbound(item_id: int, inbound_id: int, inbound_no: str):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE invoice_items SET inbound_id=?, inbound_no=? WHERE id=?",
+            (inbound_id, inbound_no, item_id)
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def fetch_inbound_orders_for_linking(filter_text=None):
+    """
+    Fetch inbound orders for linking selection.
+    Includes a flag or check if it's already linked to ANY invoice item.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # Check which inbound_ids are already used in invoice_items
+        cur.execute("SELECT DISTINCT inbound_id FROM invoice_items WHERE inbound_id IS NOT NULL")
+        used_ids = {r[0] for r in cur.fetchall()}
+        
+        sql = """
+            SELECT 
+                id, inbound_no, inbound_date, contract_no, order_no, 
+                spec_model, inbound_qty, warehouse_no
+            FROM inbound_orders
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (inbound_no LIKE ? OR contract_no LIKE ? OR order_no LIKE ? OR warehouse_no LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 4)
+            
+        sql += " ORDER BY inbound_date DESC"
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        
+        results = []
+        for r in rows:
+            # id, no, date, contract, order, spec, qty, wh
+            is_linked = r[0] in used_ids
+            results.append(r + (is_linked,))
+            
+        return results
+    finally:
+        conn.close()
+
+def delete_invoice(invoice_id: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Unlink inbound orders first
+        cur.execute("UPDATE inbound_orders SET invoice_id=NULL WHERE invoice_id=?", (invoice_id,))
+        
+        # Delete items (cascade should handle, but manual is safer if cascade not enabled)
+        cur.execute("DELETE FROM invoice_items WHERE invoice_id=?", (invoice_id,))
+        cur.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def fetch_unlinked_inbound_orders(filter_text=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                id, inbound_no, inbound_date, contract_no, order_no, 
+                spec_model, inbound_qty, warehouse_no
+            FROM inbound_orders
+            WHERE invoice_id IS NULL
+        """
+        params = []
+        if filter_text:
+            sql += " AND (inbound_no LIKE ? OR contract_no LIKE ? OR order_no LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 3)
+            
+        sql += " ORDER BY inbound_date DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_linked_inbound_orders(invoice_id: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT 
+                id, inbound_no, inbound_date, contract_no, order_no, 
+                spec_model, inbound_qty, warehouse_no
+            FROM inbound_orders
+            WHERE invoice_id=?
+            ORDER BY inbound_date DESC
+            """,
+            (invoice_id,)
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def link_inbound_to_invoice(invoice_id: int, inbound_ids: list):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # 1. Update inbound orders
+        # Reset any that were linked to this invoice but not in the new list (if full sync)
+        # But here we probably just add.
+        # User requirement: "关联入库记录，状态显示'待入账'"
+        # Assuming additive or reset? Usually reset/sync.
+        
+        # Strategy: 
+        # 1. Unlink all current for this invoice
+        # 2. Link new ones
+        
+        cur.execute("UPDATE inbound_orders SET invoice_id=NULL WHERE invoice_id=?", (invoice_id,))
+        
+        if inbound_ids:
+            placeholders = ",".join(["?"] * len(inbound_ids))
+            cur.execute(f"UPDATE inbound_orders SET invoice_id=? WHERE id IN ({placeholders})", [invoice_id] + inbound_ids)
+        
+        # 2. Update Invoice Status
+        # If has linked items -> '待入账' (if not already '已入账')
+        # If no linked items -> '新增'
+        
+        # Check current status
+        cur.execute("SELECT status, material_inbound_no FROM invoices WHERE id=?", (invoice_id,))
+        row = cur.fetchone()
+        current_status = row[0]
+        mat_no = row[1]
+        
+        new_status = current_status
+        if inbound_ids:
+            if current_status == '新增':
+                new_status = '待入账'
+        else:
+            if current_status == '待入账':
+                new_status = '新增'
+        
+        # If mat_no is present, it should be '已入账' regardless?
+        if mat_no:
+            new_status = '已入账'
+            
+        cur.execute("UPDATE invoices SET status=? WHERE id=?", (new_status, invoice_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def update_invoice_material_no(invoice_id: int, mat_no: str):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        status = '已入账' if mat_no else '待入账'
+        # Fallback to '新增' if no linked items? 
+        # Check linked items
+        cur.execute("SELECT COUNT(1) FROM inbound_orders WHERE invoice_id=?", (invoice_id,))
+        count = cur.fetchone()[0]
+        if not mat_no and count == 0:
+            status = '新增'
+            
+        cur.execute("UPDATE invoices SET material_inbound_no=?, status=? WHERE id=?", (mat_no, status, invoice_id))
+        conn.commit()
     finally:
         conn.close()

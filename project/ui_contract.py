@@ -3,7 +3,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
     QPushButton, QLineEdit, QLabel, QComboBox, QDateEdit, QGroupBox, 
     QHeaderView, QMessageBox, QFileDialog, QScrollArea, QDialog, QFormLayout,
-    QSplitter, QFrame, QDoubleSpinBox, QTextEdit, QGridLayout, QMenu, QStackedWidget
+    QSplitter, QFrame, QDoubleSpinBox, QTextEdit, QGridLayout, QMenu, QStackedWidget,
+    QTabWidget
 )
 from PySide6.QtCore import Qt, QDate, Signal, Slot, QUrl, QTimer
 from PySide6.QtGui import QColor, QIcon, QAction, QDesktopServices
@@ -12,6 +13,7 @@ import os
 import shutil
 import sys
 from datetime import datetime
+from ui_contract_report import ContractReportWidget
 
 COLUMN_CONFIG_FILE = "column_config.json"
 
@@ -1390,8 +1392,17 @@ class ContractManagerWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
+        # Use TabWidget as the main container
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+        
+        # Tab 1: Management (List/Detail Stack)
+        self.management_container = QWidget()
+        mgmt_layout = QVBoxLayout(self.management_container)
+        mgmt_layout.setContentsMargins(0,0,0,0)
+        
         self.stack = QStackedWidget()
-        layout.addWidget(self.stack)
+        mgmt_layout.addWidget(self.stack)
         
         # 1. List View
         self.list_widget = ContractListWidget()
@@ -1399,6 +1410,19 @@ class ContractManagerWidget(QWidget):
         self.stack.addWidget(self.list_widget)
         
         self.order_widget = None
+        
+        self.tabs.addTab(self.management_container, "合同管理")
+        
+        # Tab 2: Report
+        self.report_widget = ContractReportWidget()
+        self.tabs.addTab(self.report_widget, "报表分析")
+        
+        # Connect tab change to refresh report
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+        
+    def on_tab_changed(self, index):
+        if self.tabs.widget(index) == self.report_widget:
+            self.report_widget.load_data()
         
     def open_order_view(self, contract_id, contract_no, contract_name):
         if self.order_widget:
@@ -1419,6 +1443,7 @@ class ContractManagerWidget(QWidget):
             
     def load_data(self):
         self.list_widget.load_data()
+        # Also refresh report if visible? Or just wait for tab change.
         
     def refresh_suppliers(self):
         self.list_widget.refresh_suppliers()

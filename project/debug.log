@@ -1,0 +1,3 @@
+[233700:232652:0213/221821.327:WARNING:t_skinfilemap.cpp(63)] SGRenderLog:CheckUpdate newMem.OpenMem Suc, szNewMem:Local\sgime_skin.v11.filemap.sogouime
+[233700:232652:0213/221821.327:WARNING:t_skinfilemap.cpp(65)] SGRenderLog:CheckUpdate finish: old version:1
+[233700:232652:0213/221821.327:WARNING:t_skinfilemap.cpp(67)] SGRenderLog:CheckUpdate finish: new version:11

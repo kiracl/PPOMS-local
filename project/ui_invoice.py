@@ -165,12 +165,12 @@ class LinkInboundSelectionDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.itemDoubleClicked.connect(self.accept_selection)
         layout.addWidget(self.table)
         
         # Legend
-        lbl_legend = QLabel("注：灰色记录表示已关联其他发票明细")
+        lbl_legend = QLabel("注：灰色记录表示已关联其他发票明细；按住Ctrl或Shift可多选")
         lbl_legend.setStyleSheet("color: gray;")
         layout.addWidget(lbl_legend)
         
@@ -227,11 +227,17 @@ class LinkInboundSelectionDialog(QDialog):
             self.table.item(row, 0).setData(Qt.UserRole, (r[0], r[1])) # ID, No
             
     def accept_selection(self):
-        row = self.table.currentRow()
-        if row < 0: return
+        rows = self.table.selectionModel().selectedRows()
+        if not rows: return
         
-        data = self.table.item(row, 0).data(Qt.UserRole)
-        self.selected_inbound = data
+        selected = []
+        for idx in rows:
+            row = idx.row()
+            data = self.table.item(row, 0).data(Qt.UserRole) # (id, no)
+            if data:
+                selected.append(data)
+                
+        self.selected_inbound = selected
         self.accept()
 
 class InvoiceDetailDialog(QDialog):
@@ -391,11 +397,19 @@ class InvoiceDetailDialog(QDialog):
             dlg = LinkInboundSelectionDialog(self)
             if dlg.exec():
                 if dlg.selected_inbound:
-                    inbound_id, inbound_no = dlg.selected_inbound
+                    # selected_inbound is list of (id, no)
+                    selected = dlg.selected_inbound
+                    
+                    inbound_ids = [str(s[0]) for s in selected]
+                    inbound_nos = [str(s[1]) for s in selected]
+                    
+                    inbound_id_str = ",".join(inbound_ids)
+                    inbound_no_str = "，".join(inbound_nos)
+                    
                     item_id = int(self.table_items.item(row, 0).text())
                     
                     try:
-                        database.link_invoice_item_to_inbound(item_id, inbound_id, inbound_no)
+                        database.link_invoice_item_to_inbound(item_id, inbound_id_str, inbound_no_str)
                         self.load_data() # Refresh
                     except Exception as e:
                         QMessageBox.critical(self, "错误", f"关联失败: {e}")

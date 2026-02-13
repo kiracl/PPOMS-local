@@ -19,6 +19,7 @@ from ui_plan_search import PlanSearchWidget
 from ui_contract import ContractManagerWidget
 from ui_inbound import InboundManagerWidget
 from ui_invoice import InvoiceManagerWidget
+from ui_settlement import SettlementModule
 import database
 from print import export_order_pdf
 
@@ -26,7 +27,7 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.4.0138")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.6.0213")
         
         # Main Container
         container = QWidget()
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("合同管理")
         self.sidebar.addItem("入库管理")
         self.sidebar.addItem("发票管理")
+        self.sidebar.addItem("结算办理")
         self.sidebar.addItem("数据管理")
         main_layout.addWidget(self.sidebar)
         
@@ -112,19 +114,23 @@ class MainWindow(QMainWindow):
         self.recommendation = RecommendationWidget()
         self.right_stack.addWidget(self.recommendation)
         
-        # 7. Contract Manager Page (Index 6)
+        # 7. Contract Manager Page (Index 7)
         self.contract_manager = ContractManagerWidget()
         self.right_stack.addWidget(self.contract_manager)
 
-        # 8. Inbound Manager Page (Index 7)
+        # 8. Inbound Manager Page (Index 8)
         self.inbound_manager = InboundManagerWidget()
         self.right_stack.addWidget(self.inbound_manager)
 
-        # 9. Invoice Manager Page (Index 8)
+        # 9. Invoice Manager Page (Index 9)
         self.invoice_manager = InvoiceManagerWidget()
         self.right_stack.addWidget(self.invoice_manager)
 
-        # 10. Data Manager Page (Index 9)
+        # 10. Settlement Module (Index 10)
+        self.settlement_module = SettlementModule()
+        self.right_stack.addWidget(self.settlement_module)
+
+        # 11. Data Manager Page (Index 11)
         self.data_manager = DataManagerWidget()
         self.right_stack.addWidget(self.data_manager)
         
@@ -189,6 +195,9 @@ class MainWindow(QMainWindow):
         elif index == 9:
             self.invoice_manager.load_data()
         elif index == 10:
+            self.settlement_module.reconciliation_tab.refresh_data()
+            self.settlement_module.settlement_tab.refresh_data()
+        elif index == 11:
             self.data_manager.load_backups()
 
     def get_display_name(self, path):
@@ -669,9 +678,6 @@ def main():
     w.showMaximized()
     sys.exit(app.exec())
 
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()

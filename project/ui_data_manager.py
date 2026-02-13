@@ -2,6 +2,7 @@ import os
 import shutil
 import datetime
 import zipfile
+import sqlite3
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, 
@@ -170,6 +171,9 @@ class DataManagerWidget(QWidget):
             self.table.setCellWidget(r, 3, w)
 
     def _create_backup_zip(self, target_zip_path):
+        # Ensure associated files are in project directory before zipping
+        self.consolidate_files()
+        
         with zipfile.ZipFile(target_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # 1. Database
             if os.path.exists(database.DB_PATH):
@@ -186,10 +190,112 @@ class DataManagerWidget(QWidget):
                         rel_path = os.path.relpath(abs_path, base_dir)
                         zipf.write(abs_path, arcname=rel_path)
             
-            # 3. Column Config (optional but good)
+            # 3. Approval Docs folder (审批单据)
+            approval_dir = os.path.join(base_dir, "审批单据")
+            if os.path.exists(approval_dir):
+                for root, dirs, files in os.walk(approval_dir):
+                    for file in files:
+                        abs_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(abs_path, base_dir)
+                        zipf.write(abs_path, arcname=rel_path)
+
+            # 4. Column Config (optional but good)
             config_path = os.path.join(base_dir, "column_config.json")
             if os.path.exists(config_path):
                 zipf.write(config_path, arcname="column_config.json")
+
+    def consolidate_files(self):
+        """
+        Check all file links in DB. If they point to files outside the project directory,
+        copy them to project directory and update DB.
+        """
+        try:
+            base_dir = os.path.dirname(database.DB_PATH)
+            
+            # Setup Dirs
+            dir_approval = os.path.join(base_dir, "审批单据")
+            dir_contract = os.path.join(base_dir, "合同附件")
+            for d in [dir_approval, dir_contract]:
+                if not os.path.exists(d):
+                    os.makedirs(d)
+                    
+            conn = sqlite3.connect(database.DB_PATH)
+            cur = conn.cursor()
+            
+            # 1. Process Approval Docs (orders table)
+            cur.execute("SELECT number, approval_doc FROM orders WHERE approval_doc IS NOT NULL AND approval_doc != ''")
+            rows = cur.fetchall()
+            for number, path in rows:
+                if not os.path.exists(path):
+                    continue
+                
+                abs_path = os.path.abspath(path)
+                abs_target = os.path.abspath(dir_approval)
+                
+                if not abs_path.startswith(abs_target):
+                    fname = os.path.basename(path)
+                    new_path = os.path.join(dir_approval, fname)
+                    
+                    if os.path.exists(new_path):
+                        # Simple rename if collision
+                        import time
+                        timestamp = int(time.time())
+                        name, ext = os.path.splitext(fname)
+                        new_path = os.path.join(dir_approval, f"{name}_{timestamp}{ext}")
+                        
+                    shutil.copy2(path, new_path)
+                    cur.execute("UPDATE orders SET approval_doc=? WHERE number=?", (new_path, number))
+                
+            # 2. Process Contract Attachments (contracts table)
+            cur.execute("SELECT id, attachment FROM contracts WHERE attachment IS NOT NULL AND attachment != ''")
+            rows = cur.fetchall()
+            for cid, path in rows:
+                if not os.path.exists(path):
+                    continue
+                    
+                abs_path = os.path.abspath(path)
+                abs_target = os.path.abspath(dir_contract)
+                
+                if not abs_path.startswith(abs_target):
+                    fname = os.path.basename(path)
+                    new_path = os.path.join(dir_contract, fname)
+                    
+                    if os.path.exists(new_path):
+                        import time
+                        timestamp = int(time.time())
+                        name, ext = os.path.splitext(fname)
+                        new_path = os.path.join(dir_contract, f"{name}_{timestamp}{ext}")
+                        
+                    shutil.copy2(path, new_path)
+                    cur.execute("UPDATE contracts SET attachment=? WHERE id=?", (new_path, cid))
+
+            # 3. Process Contract Attachments (contract_attachments table)
+            cur.execute("SELECT id, file_path FROM contract_attachments WHERE file_path IS NOT NULL AND file_path != ''")
+            rows = cur.fetchall()
+            for aid, path in rows:
+                if not os.path.exists(path):
+                    continue
+                    
+                abs_path = os.path.abspath(path)
+                abs_target = os.path.abspath(dir_contract)
+                
+                if not abs_path.startswith(abs_target):
+                    fname = os.path.basename(path)
+                    new_path = os.path.join(dir_contract, fname)
+                    
+                    if os.path.exists(new_path):
+                        import time
+                        timestamp = int(time.time())
+                        name, ext = os.path.splitext(fname)
+                        new_path = os.path.join(dir_contract, f"{name}_{timestamp}{ext}")
+                        
+                    shutil.copy2(path, new_path)
+                    cur.execute("UPDATE contract_attachments SET file_path=? WHERE id=?", (new_path, aid))
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Consolidate error: {e}")
 
     def do_backup_default(self):
         try:

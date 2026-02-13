@@ -229,6 +229,98 @@ def _init_schema(conn: sqlite3.Connection):
     )
     conn.commit()
 
+    # --- NEW TABLE: historical_quotes ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT,
+            item_name TEXT,
+            spec_model TEXT,
+            unit TEXT,
+            quantity REAL,
+            audit_price REAL,
+            supplier TEXT,
+            quote_date TEXT,
+            source_file TEXT,
+            created_at TEXT,
+            status TEXT DEFAULT 'pending'
+        )
+        """
+    )
+    conn.commit()
+
+    # --- NEW TABLES: Standard Items & Mappings (Phase 2) ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS standard_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            spec TEXT,
+            unit TEXT,
+            avg_price REAL,
+            min_price REAL,
+            max_price REAL,
+            latest_price REAL,
+            data_count INTEGER DEFAULT 0,
+            updated_at TEXT,
+            UNIQUE(name, spec)
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS item_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_name TEXT,
+            raw_spec TEXT,
+            standard_item_id INTEGER,
+            confidence REAL,
+            source TEXT,
+            created_at TEXT,
+            UNIQUE(raw_name, raw_spec),
+            FOREIGN KEY(standard_item_id) REFERENCES standard_items(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+
+    # --- Settlement Management Tables ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconciliations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconciliation_no TEXT UNIQUE,
+            supplier TEXT,
+            status TEXT DEFAULT '待对账',
+            total_amount REAL,
+            created_at TEXT,
+            remarks TEXT
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconciliation_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconciliation_id INTEGER,
+            invoice_item_id INTEGER,
+            inbound_order_id INTEGER,
+            quantity REAL,
+            amount_excl_tax REAL,
+            amount_incl_tax REAL,
+            FOREIGN KEY(reconciliation_id) REFERENCES reconciliations(id) ON DELETE CASCADE,
+            FOREIGN KEY(invoice_item_id) REFERENCES invoice_items(id),
+            FOREIGN KEY(inbound_order_id) REFERENCES inbound_orders(id)
+        )
+        """
+    )
+    conn.commit()
+
     cur.execute("SELECT COUNT(1) FROM units")
     cnt = cur.fetchone()[0]
     if cnt == 0:
@@ -801,6 +893,117 @@ def _migrate_schema(conn: sqlite3.Connection):
     )
     conn.commit()
 
+    # --- NEW TABLE MIGRATION: historical_quotes ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT,
+            item_name TEXT,
+            spec_model TEXT,
+            unit TEXT,
+            quantity REAL,
+            audit_price REAL,
+            supplier TEXT,
+            quote_date TEXT,
+            source_file TEXT,
+            created_at TEXT,
+            status TEXT DEFAULT 'pending'
+        )
+        """
+    )
+    # Check if status exists in historical_quotes
+    cur.execute("PRAGMA table_info(historical_quotes)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "status" not in cols:
+        cur.execute("ALTER TABLE historical_quotes ADD COLUMN status TEXT DEFAULT 'pending'")
+    conn.commit()
+
+    # --- NEW TABLES MIGRATION: Standard Items & Mappings (Phase 2) ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS standard_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            spec TEXT,
+            unit TEXT,
+            avg_price REAL,
+            min_price REAL,
+            max_price REAL,
+            latest_price REAL,
+            data_count INTEGER DEFAULT 0,
+            updated_at TEXT,
+            UNIQUE(name, spec)
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS item_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_name TEXT,
+            raw_spec TEXT,
+            standard_item_id INTEGER,
+            confidence REAL,
+            source TEXT,
+            created_at TEXT,
+            UNIQUE(raw_name, raw_spec),
+            FOREIGN KEY(standard_item_id) REFERENCES standard_items(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+
+
+
+# --- NEW TABLES MIGRATION: Settlement Management ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconciliations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconciliation_no TEXT UNIQUE,
+            supplier TEXT,
+            status TEXT DEFAULT '待对账',
+            total_amount REAL,
+            created_at TEXT,
+            remarks TEXT
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconciliation_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconciliation_id INTEGER,
+            invoice_item_id INTEGER,
+            inbound_order_id INTEGER,
+            quantity REAL,
+            amount_excl_tax REAL,
+            amount_incl_tax REAL,
+            FOREIGN KEY(reconciliation_id) REFERENCES reconciliations(id) ON DELETE CASCADE,
+            FOREIGN KEY(invoice_item_id) REFERENCES invoice_items(id),
+            FOREIGN KEY(inbound_order_id) REFERENCES inbound_orders(id)
+        )
+        """
+    )
+    conn.commit()
+
+    # --- NEW TABLES MIGRATION: Table Column Config ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS table_column_configs (
+            table_key TEXT,
+            column_index INTEGER,
+            width INTEGER,
+            PRIMARY KEY (table_key, column_index)
+        )
+        """
+    )
+    conn.commit()
 
 
 def init_db():
@@ -3557,7 +3760,19 @@ def fetch_inbound_orders_for_linking(filter_text=None):
         
         # Check which inbound_ids are already used in invoice_items
         cur.execute("SELECT DISTINCT inbound_id FROM invoice_items WHERE inbound_id IS NOT NULL")
-        used_ids = {r[0] for r in cur.fetchall()}
+        rows = cur.fetchall()
+        used_ids = set()
+        for r in rows:
+            val = r[0]
+            if isinstance(val, int):
+                used_ids.add(val)
+            elif isinstance(val, str):
+                for p in val.split(','):
+                    if p.strip():
+                        try:
+                            used_ids.add(int(p.strip()))
+                        except:
+                            pass
         
         sql = """
             SELECT 
@@ -3688,6 +3903,139 @@ def link_inbound_to_invoice(invoice_id: int, inbound_ids: list):
     finally:
         conn.close()
 
+def fetch_contract_statistics(filter_year=None, filter_supplier=None, filter_category=None):
+    """
+    Fetch aggregated statistics for contracts.
+    Returns a list of dictionaries with keys:
+    - contract_id, contract_number, contract_name, supplier, category, sign_date
+    - total_amount (contracts.amount)
+    - executed_amount (sum of contract_orders.total_price)
+    - order_count (count of contract_orders)
+    - invoiced_amount (sum of invoice_items.amount linked to this contract)
+    - settled_amount (sum of invoice_items.amount where invoice status is '已入账')
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        # Base query for contracts
+        sql = """
+            SELECT 
+                c.id, c.contract_number, c.name, c.supplier, c.category, c.sign_date, c.amount
+            FROM contracts c
+            WHERE 1=1
+        """
+        params = []
+        
+        if filter_year:
+            sql += " AND c.sign_date LIKE ?"
+            params.append(f"{filter_year}%")
+            
+        if filter_supplier and filter_supplier != "全部":
+            sql += " AND c.supplier = ?"
+            params.append(filter_supplier)
+            
+        if filter_category and filter_category != "全部":
+            sql += " AND c.category = ?"
+            params.append(filter_category)
+            
+        sql += " ORDER BY c.sign_date DESC"
+        
+        cur.execute(sql, params)
+        contracts = cur.fetchall()
+        
+        results = []
+        
+        for c in contracts:
+            c_id, c_no, c_name, c_sup, c_cat, c_date, c_amt = c
+            c_amt = c_amt or 0.0
+            
+            # 1. Executed Amount & Order Count
+            cur.execute(
+                "SELECT SUM(total_price), COUNT(id) FROM contract_orders WHERE contract_id=?", 
+                (c_id,)
+            )
+            exec_row = cur.fetchone()
+            exec_amt = exec_row[0] if exec_row and exec_row[0] else 0.0
+            order_cnt = exec_row[1] if exec_row and exec_row[1] else 0
+            
+            # 2. Invoiced Amount & Settled Amount
+            # Logic: Contract -> Contract Orders -> Inbound Orders -> Invoice Items -> Invoices
+            # We need to sum invoice_items.amount (or amount+tax? usually just amount or total_amount depending on req)
+            # Let's assume "amount" (excluding tax) or "total_amount" (including tax)? 
+            # Contract amount is usually total. Invoice total_amount is likely what matches.
+            # Let's use total_amount (amount + tax) from invoice_items.
+            # But invoice_items table has: amount, tax_amount. So total = amount + tax_amount.
+            # Or we can query invoice_items.amount + invoice_items.tax_amount
+            
+            # Find all contract_order_ids for this contract
+            cur.execute("SELECT id FROM contract_orders WHERE contract_id=?", (c_id,))
+            co_ids = [str(r[0]) for r in cur.fetchall()]
+            
+            invoiced_amt = 0.0
+            settled_amt = 0.0
+            
+            if co_ids:
+                placeholders = ",".join(["?"] * len(co_ids))
+                # Find inbound orders linked to these contract orders
+                cur.execute(
+                    f"SELECT id FROM inbound_orders WHERE contract_order_id IN ({placeholders})",
+                    co_ids
+                )
+                inbound_ids = [str(r[0]) for r in cur.fetchall()]
+                
+                if inbound_ids:
+                    target_ids = set(inbound_ids)
+                    
+                    # Get all invoice items with inbound_id
+                    # Note: We fetch all to filter in Python because inbound_id can be comma-separated string
+                    cur.execute("SELECT inbound_id, amount, tax_amount, invoice_id FROM invoice_items WHERE inbound_id IS NOT NULL")
+                    all_items = cur.fetchall()
+                    
+                    relevant_inv_ids = set()
+                    item_amts = [] # (amt, invoice_id)
+                    
+                    for r in all_items:
+                        val = r[0]
+                        current_ids = set()
+                        if isinstance(val, int):
+                            current_ids.add(str(val))
+                        elif isinstance(val, str):
+                            current_ids.update([x.strip() for x in val.split(',') if x.strip()])
+                            
+                        if not current_ids.isdisjoint(target_ids):
+                            amt = (r[1] or 0) + (r[2] or 0)
+                            item_amts.append((amt, r[3]))
+                            relevant_inv_ids.add(r[3])
+                            
+                    if relevant_inv_ids:
+                        p_holders = ",".join(["?"] * len(relevant_inv_ids))
+                        cur.execute(f"SELECT id, status FROM invoices WHERE id IN ({p_holders})", list(relevant_inv_ids))
+                        status_map = {row[0]: row[1] for row in cur.fetchall()}
+                        
+                        for amt, inv_id in item_amts:
+                            invoiced_amt += amt
+                            if status_map.get(inv_id) == '已入账':
+                                settled_amt += amt
+            
+            results.append({
+                'contract_id': c_id,
+                'contract_number': c_no,
+                'contract_name': c_name,
+                'supplier': c_sup,
+                'category': c_cat,
+                'sign_date': c_date,
+                'total_amount': c_amt,
+                'executed_amount': exec_amt,
+                'order_count': order_cnt,
+                'invoiced_amount': invoiced_amt,
+                'settled_amount': settled_amt
+            })
+            
+        return results
+    finally:
+        conn.close()
+
 def update_invoice_material_no(invoice_id: int, mat_no: str):
     conn = _connect()
     try:
@@ -3701,6 +4049,265 @@ def update_invoice_material_no(invoice_id: int, mat_no: str):
             status = '新增'
             
         cur.execute("UPDATE invoices SET material_inbound_no=?, status=? WHERE id=?", (mat_no, status, invoice_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def fetch_reconciliations(filter_text=None, status_filter=None):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT id, reconciliation_no, supplier, status, total_amount, created_at, remarks
+            FROM reconciliations
+            WHERE 1=1
+        """
+        params = []
+        if filter_text:
+            sql += " AND (reconciliation_no LIKE ? OR supplier LIKE ?)"
+            params.extend([f"%{filter_text}%"] * 2)
+        if status_filter:
+            sql += " AND status = ?"
+            params.append(status_filter)
+        
+        sql += " ORDER BY created_at DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def save_reconciliation(data: dict):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        if 'id' in data and data['id']:
+            cur.execute(
+                """
+                UPDATE reconciliations SET 
+                    supplier=?, status=?, total_amount=?, remarks=?
+                WHERE id=?
+                """,
+                (data['supplier'], data['status'], data['total_amount'], data['remarks'], data['id'])
+            )
+            rec_id = data['id']
+        else:
+            cur.execute(
+                """
+                INSERT INTO reconciliations(reconciliation_no, supplier, status, total_amount, created_at, remarks)
+                VALUES(?,?,?,?,?,?)
+                """,
+                (
+                    data['reconciliation_no'], data['supplier'], data.get('status', '待对账'),
+                    data['total_amount'], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get('remarks')
+                )
+            )
+            rec_id = cur.lastrowid
+        conn.commit()
+        return rec_id
+    finally:
+        conn.close()
+
+def delete_reconciliation(rec_id: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM reconciliations WHERE id=?", (rec_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_next_reconciliation_number():
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Format: DZ-YYMMDD-0001
+        prefix = f"DZ-{datetime.now().strftime('%y%m%d')}-"
+        cur.execute("SELECT reconciliation_no FROM reconciliations WHERE reconciliation_no LIKE ? ORDER BY reconciliation_no DESC LIMIT 1", (prefix + "%",))
+        row = cur.fetchone()
+        if row:
+            try:
+                seq = int(row[0].split("-")[-1])
+                return f"{prefix}{seq+1:04d}"
+            except:
+                pass
+        return f"{prefix}0001"
+    finally:
+        conn.close()
+
+def fetch_unreconciled_invoices(supplier_filter=None):
+    """
+    Fetch invoices that are NOT in any reconciliation.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                i.id, i.invoice_number, i.seller_name, i.total_amount, i.date, i.status
+            FROM invoices i
+            WHERE i.status != '已完成' 
+            AND NOT EXISTS (
+                SELECT 1 FROM reconciliation_details rd 
+                JOIN invoice_items ii ON rd.invoice_item_id = ii.id
+                WHERE ii.invoice_id = i.id
+            )
+        """
+        params = []
+        if supplier_filter:
+            sql += " AND i.seller_name LIKE ?"
+            params.append(f"%{supplier_filter}%")
+            
+        sql += " ORDER BY i.date DESC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_invoice_items_with_inbound_split(invoice_ids: list):
+    """
+    Fetch invoice items for given invoice IDs, splitting them by inbound orders.
+    """
+    if not invoice_ids: return []
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join(["?"] * len(invoice_ids))
+        cur.execute(f"""
+            SELECT 
+                ii.id, ii.invoice_id, ii.item_name, ii.spec_model, ii.unit, 
+                ii.quantity, ii.unit_price, ii.amount, ii.tax_rate, ii.inbound_id
+            FROM invoice_items ii
+            WHERE ii.invoice_id IN ({placeholders})
+        """, invoice_ids)
+        items = cur.fetchall()
+        
+        results = []
+        for item in items:
+            ii_id, inv_id, name, spec, unit, qty, price, amt, tax_rate, inbound_ids_str = item
+            
+            inbound_id_list = []
+            if inbound_ids_str:
+                if isinstance(inbound_ids_str, int):
+                    inbound_id_list = [inbound_ids_str]
+                else:
+                    inbound_id_list = [int(x) for x in str(inbound_ids_str).split(',') if x.strip().isdigit()]
+            
+            if not inbound_id_list:
+                results.append({
+                    'invoice_item_id': ii_id,
+                    'inbound_order_id': None,
+                    'warehouse_no': '',
+                    'quantity': qty,
+                    'amount': amt,
+                    'unit_price': price,
+                    'tax_rate': tax_rate,
+                    'item_name': name,
+                    'spec_model': spec,
+                    'unit': unit
+                })
+            else:
+                p_holders = ",".join(["?"] * len(inbound_id_list))
+                cur.execute(f"SELECT id, warehouse_no, inbound_qty FROM inbound_orders WHERE id IN ({p_holders})", inbound_id_list)
+                inbounds = cur.fetchall()
+                
+                total_inbound_qty = sum([r[2] or 0 for r in inbounds])
+                if total_inbound_qty == 0: total_inbound_qty = 1
+                
+                for ib in inbounds:
+                    ib_id, ib_no, ib_qty = ib
+                    ib_qty = ib_qty or 0
+                    ratio = ib_qty / total_inbound_qty
+                    
+                    split_qty = qty * ratio
+                    split_amt = amt * ratio
+                    
+                    results.append({
+                        'invoice_item_id': ii_id,
+                        'inbound_order_id': ib_id,
+                        'warehouse_no': ib_no,
+                        'quantity': split_qty,
+                        'amount': split_amt,
+                        'unit_price': price,
+                        'tax_rate': tax_rate,
+                        'item_name': name,
+                        'spec_model': spec,
+                        'unit': unit
+                    })
+        return results
+    finally:
+        conn.close()
+
+def create_reconciliation_details_batch(rec_id: int, items_data: list):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for item in items_data:
+            amt = item['amount']
+            tax_rate = item.get('tax_rate', 0) or 0
+            if tax_rate > 1: tax_rate = tax_rate / 100.0
+            
+            amt_incl = amt * (1 + tax_rate)
+            
+            cur.execute(
+                """
+                INSERT INTO reconciliation_details(
+                    reconciliation_id, invoice_item_id, inbound_order_id, 
+                    quantity, amount_excl_tax, amount_incl_tax
+                ) VALUES(?,?,?,?,?,?)
+                """,
+                (
+                    rec_id, item['invoice_item_id'], item['inbound_order_id'],
+                    item['quantity'], amt, amt_incl
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+def fetch_reconciliation_details(rec_id: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                rd.id, 
+                i.invoice_number, 
+                io.warehouse_no, 
+                ii.unit, 
+                rd.quantity, 
+                ii.unit_price, 
+                rd.amount_excl_tax, 
+                rd.amount_incl_tax, 
+                ii.spec_model,
+                ii.item_name
+            FROM reconciliation_details rd
+            LEFT JOIN invoice_items ii ON rd.invoice_item_id = ii.id
+            LEFT JOIN invoices i ON ii.invoice_id = i.id
+            LEFT JOIN inbound_orders io ON rd.inbound_order_id = io.id
+            WHERE rd.reconciliation_id = ?
+        """
+        cur.execute(sql, (rec_id,))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def get_table_column_widths(table_key: str):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT column_index, width FROM table_column_configs WHERE table_key=?", (table_key,))
+        return {int(c): int(w) for c, w in cur.fetchall()}
+    finally:
+        conn.close()
+
+def save_table_column_width(table_key: str, col_index: int, width: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO table_column_configs(table_key, column_index, width) VALUES(?,?,?)",
+            (table_key, col_index, width)
+        )
         conn.commit()
     finally:
         conn.close()

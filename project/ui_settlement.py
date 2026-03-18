@@ -183,6 +183,51 @@ class SettlementManager(QWidget):
         self.open_viewer.emit(rid)
 
 
+class InvoiceDeletionDialog(QDialog):
+    def __init__(self, rec_id, parent=None):
+        super().__init__(parent)
+        self.rec_id = rec_id
+        self.setWindowTitle("选择要删除的发票")
+        self.resize(600, 400)
+        self.selected_invoice_id = None
+        
+        layout = QVBoxLayout(self)
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["ID", "发票号", "金额", "日期"])
+        self.table.setColumnHidden(0, True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        
+        layout.addWidget(self.table)
+        
+        # Load data
+        invoices = database.fetch_invoices_in_reconciliation(rec_id)
+        self.table.setRowCount(0)
+        for inv in invoices:
+            # id, number, amount, date
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            self.table.setItem(r, 0, QTableWidgetItem(str(inv[0])))
+            self.table.setItem(r, 1, QTableWidgetItem(str(inv[1])))
+            self.table.setItem(r, 2, QTableWidgetItem(f"{inv[2]:.2f}"))
+            self.table.setItem(r, 3, QTableWidgetItem(str(inv[3])))
+            
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+    def accept(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "提示", "请选择要删除的发票")
+            return
+        self.selected_invoice_id = int(self.table.item(row, 0).text())
+        super().accept()
+
 class ReconciliationEditor(QWidget):
     back_signal = Signal()
     
@@ -211,9 +256,12 @@ class ReconciliationEditor(QWidget):
         self.btn_complete.clicked.connect(self.complete_reconciliation)
         self.btn_export = QPushButton("导出明细")
         self.btn_export.clicked.connect(self.export_details)
+        self.btn_settle = QPushButton("完成结算")
+        self.btn_settle.clicked.connect(self.complete_settlement)
         
         header_layout.addWidget(self.btn_save)
         header_layout.addWidget(self.btn_complete)
+        header_layout.addWidget(self.btn_settle)
         header_layout.addWidget(self.btn_export)
         
         self.layout.addLayout(header_layout)
@@ -254,13 +302,18 @@ class ReconciliationEditor(QWidget):
         self.btn_add_invoices = QPushButton("添加发票")
         self.btn_add_invoices.clicked.connect(self.add_invoices)
         tool_layout.addWidget(self.btn_add_invoices)
+        
+        self.btn_del_invoices = QPushButton("删除发票")
+        self.btn_del_invoices.clicked.connect(self.delete_invoices)
+        tool_layout.addWidget(self.btn_del_invoices)
+        
         tool_layout.addStretch()
         
         detail_layout.addLayout(tool_layout)
         
         self.table = QTableWidget()
-        # Columns: ID, InvoiceNo, WhNo, Unit, Qty, Price, Amount(Excl), Amount(Incl), Spec, ItemName
-        columns = ["ID", "发票编号", "仓库单号", "单位", "数量", "单价", "金额(不含税)", "含税总价", "规格型号", "物品名称"]
+        # Columns: ID, InvoiceNo, WhNo, Unit, Qty, Price, Amount(Excl), Amount(Incl), Spec
+        columns = ["ID", "发票编号", "仓库单号", "单位", "数量", "单价", "金额(不含税)", "含税总价", "规格型号"]
         self.table.setColumnCount(len(columns))
         self.table.setHorizontalHeaderLabels(columns)
         
@@ -278,7 +331,7 @@ class ReconciliationEditor(QWidget):
             self.table.setColumnWidth(0, 50) # ID
             self.table.setColumnWidth(1, 120) # Invoice
             self.table.setColumnWidth(2, 120) # Warehouse
-            self.table.setColumnWidth(9, 200) # Item Name
+            self.table.setColumnWidth(8, 250) # Spec (Merged)
         
         # Connect resize signal
         self.table.horizontalHeader().sectionResized.connect(self.save_column_width)
@@ -295,6 +348,12 @@ class ReconciliationEditor(QWidget):
         self.current_id = rec_id
         self.mode = mode
         
+        # Refresh suppliers list
+        current_supplier = self.input_supplier.currentText()
+        self.input_supplier.clear()
+        self.input_supplier.addItems(database.fetch_suppliers())
+        # Restore or clear selection will be handled below
+        
         # Reset UI
         self.table.setRowCount(0)
         self.input_supplier.setCurrentIndex(-1)
@@ -304,14 +363,21 @@ class ReconciliationEditor(QWidget):
             self.btn_save.setVisible(False)
             self.btn_complete.setVisible(False)
             self.btn_add_invoices.setVisible(False)
+            self.btn_del_invoices.setVisible(False)
             self.input_supplier.setEnabled(False)
             self.title_label.setText("结算单详情")
+            # Show settle button if status is '已对账'
+            # But we don't have status here yet, we fetch it below.
+            # So default hide, show later.
+            self.btn_settle.setVisible(False)
         else:
             self.btn_save.setVisible(True)
             self.btn_complete.setVisible(True)
             self.btn_add_invoices.setVisible(True)
+            self.btn_del_invoices.setVisible(True)
             self.input_supplier.setEnabled(True)
             self.title_label.setText("编辑对账单")
+            self.btn_settle.setVisible(False)
             
         if rec_id:
             # Fetch Header
@@ -328,21 +394,69 @@ class ReconciliationEditor(QWidget):
                     self.btn_save.setVisible(False)
                     self.btn_complete.setVisible(False)
                     self.btn_add_invoices.setVisible(False)
+                    self.btn_del_invoices.setVisible(False)
                     self.input_supplier.setEnabled(False)
+                    
+                if rec[3] == '已对账' and mode == 'view':
+                    self.btn_settle.setVisible(True)
+                
+                if rec[3] == '已结算':
+                    self.btn_settle.setVisible(False)
                 
             # Fetch Details
             details = database.fetch_reconciliation_details(rec_id)
             for row in details:
-                # id, inv_no, wh_no, unit, qty, price, amt_ex, amt_in, spec, name
+                # id, inv_no, wh_no, unit, qty, price, amt_ex, amt_in, spec, name, inv_id(new)
+                # row len is 11 now
+                
                 r_idx = self.table.rowCount()
                 self.table.insertRow(r_idx)
-                for i, val in enumerate(row):
-                    self.table.setItem(r_idx, i, QTableWidgetItem(str(val) if val is not None else ""))
+                
+                # Manual mapping to columns
+                # 0: ID (row[0])
+                self.table.setItem(r_idx, 0, QTableWidgetItem(str(row[0])))
+                # 1: InvoiceNo (row[1])
+                self.table.setItem(r_idx, 1, QTableWidgetItem(str(row[1])))
+                # 2: WhNo (row[2])
+                self.table.setItem(r_idx, 2, QTableWidgetItem(str(row[2]) if row[2] else ""))
+                # 3: Unit (row[3])
+                self.table.setItem(r_idx, 3, QTableWidgetItem(str(row[3])))
+                # 4: Qty (row[4])
+                self.table.setItem(r_idx, 4, QTableWidgetItem(str(row[4])))
+                # 5: Price (row[5])
+                self.table.setItem(r_idx, 5, QTableWidgetItem(f"{row[5]:.4f}"))
+                # 6: Amount Excl (row[6])
+                self.table.setItem(r_idx, 6, QTableWidgetItem(f"{row[6]:.2f}"))
+                # 7: Amount Incl (row[7])
+                self.table.setItem(r_idx, 7, QTableWidgetItem(f"{row[7]:.2f}"))
+                
+                # 8: Spec (Merged: Name + Spec)
+                spec_val = row[8] if row[8] else ""
+                name_val = row[9] if row[9] else ""
+                merged_spec = f"{name_val} {spec_val}".strip()
+                self.table.setItem(r_idx, 8, QTableWidgetItem(merged_spec))
         else:
             # New
             self.input_no.setText(database.get_next_reconciliation_number())
             self.input_status.setText("待对账")
             self.input_supplier.setCurrentText("")
+
+    def delete_invoices(self):
+        if not self.current_id:
+            QMessageBox.warning(self, "提示", "请先保存对账单")
+            return
+            
+        dlg = InvoiceDeletionDialog(self.current_id, self)
+        if dlg.exec():
+            invoice_id = dlg.selected_invoice_id
+            if invoice_id:
+                if QMessageBox.question(self, "确认", "确定要删除该发票及其所有明细吗？") == QMessageBox.Yes:
+                    database.delete_reconciliation_invoice(self.current_id, invoice_id)
+                    # Refresh details
+                    self.load_data(self.current_id, self.mode)
+                    # Update total amount (save trigger)
+                    self.save_data()
+                    QMessageBox.information(self, "成功", "删除成功")
             
     def add_invoices(self):
         supplier = self.input_supplier.currentText().strip()
@@ -434,6 +548,23 @@ class ReconciliationEditor(QWidget):
             self.load_data(self.current_id, "edit") # Refresh UI state
             QMessageBox.information(self, "成功", "已标记为已对账")
             
+    def complete_settlement(self):
+        if not self.current_id: return
+        
+        if QMessageBox.question(self, "确认", "确定要完成结算吗？这将标记相关发票为已结算。") == QMessageBox.Yes:
+            # Update status
+            data = {
+                'id': self.current_id,
+                'reconciliation_no': self.input_no.text(),
+                'supplier': self.input_supplier.currentText(),
+                'status': '已结算',
+                'total_amount': float(self.input_total.text() or 0),
+                'remarks': ''
+            }
+            database.save_reconciliation(data)
+            self.load_data(self.current_id, "view") # Refresh UI state
+            QMessageBox.information(self, "成功", "已完成结算")
+            
     def export_details(self):
         if self.table.rowCount() == 0:
             return
@@ -472,15 +603,34 @@ class InvoiceSelectionDialog(QDialog):
         
         self.table = QTableWidget()
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["ID", "发票号", "供应商", "金额", "日期", "状态"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Rename "供应商" to "销售方"
+        self.table.setHorizontalHeaderLabels(["ID", "发票号", "销售方", "金额", "日期", "状态"])
+        
+        # Interactive Resize
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        
+        # Persistence
+        widths = database.get_table_column_widths("settlement_invoice_selection")
+        if widths:
+            for col, width in widths.items():
+                self.table.setColumnWidth(col, width)
+        else:
+            self.table.setColumnWidth(1, 150) # Invoice No
+            self.table.setColumnWidth(2, 200) # Seller
+            self.table.setColumnWidth(3, 100) # Amount
+            self.table.setColumnWidth(4, 100) # Date
+        
+        self.table.horizontalHeader().sectionResized.connect(self.save_column_width)
+        
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.MultiSelection)
         
         layout.addWidget(self.table)
         
-        # Load data
-        data = database.fetch_unreconciled_invoices(supplier)
+        # Load data - Fetch ALL unreconciled invoices (ignore supplier filter)
+        data = database.fetch_unreconciled_invoices(None)
+        
         self.table.setRowCount(0)
         for row in data:
             r_idx = self.table.rowCount()
@@ -492,6 +642,9 @@ class InvoiceSelectionDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        
+    def save_column_width(self, logicalIndex, oldSize, newSize):
+        database.save_table_column_width("settlement_invoice_selection", logicalIndex, newSize)
         
     def get_selected_ids(self):
         rows = set()

@@ -224,7 +224,7 @@ class LinkInboundSelectionDialog(QDialog):
                 
                 self.table.setItem(row, i, item)
             
-            self.table.item(row, 0).setData(Qt.UserRole, (r[0], r[1])) # ID, No
+            self.table.item(row, 0).setData(Qt.UserRole, (r[0], r[7] if r[7] else "")) # ID, Warehouse No (not Inbound No)
             
     def accept_selection(self):
         rows = self.table.selectionModel().selectedRows()
@@ -350,6 +350,12 @@ class InvoiceDetailDialog(QDialog):
                     self.lbl_status.setStyleSheet("color: orange; font-weight: bold;")
                 elif status == '已入账':
                     self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
+                elif status == '对账中':
+                    self.lbl_status.setStyleSheet("color: purple; font-weight: bold;")
+                elif status == '完成对账':
+                    self.lbl_status.setStyleSheet("color: teal; font-weight: bold;")
+                elif status == '已结算':
+                    self.lbl_status.setStyleSheet("color: black; font-weight: bold;")
         finally:
             conn.close()
             
@@ -556,6 +562,12 @@ class InvoiceManagerWidget(QWidget):
                 item_status.setForeground(QColor("orange"))
             elif r[6] == '已入账':
                 item_status.setForeground(QColor("green"))
+            elif r[6] == '对账中':
+                item_status.setForeground(QColor("purple"))
+            elif r[6] == '完成对账':
+                item_status.setForeground(QColor("teal"))
+            elif r[6] == '已结算':
+                item_status.setForeground(QColor("black"))
             self.table.setItem(row, 8, item_status)
             
             # 9: Action

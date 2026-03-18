@@ -8,9 +8,31 @@ import database
 import pandas as pd
 import os
 
+class DataLoader(QThread):
+    data_loaded = Signal(list, int, list)
+
+    def __init__(self, filter_text, limit, offset):
+        super().__init__()
+        self.filter_text = filter_text
+        self.limit = limit
+        self.offset = offset
+
+    def run(self):
+        try:
+            rows, total = database.fetch_recommendations(self.filter_text, self.limit, self.offset)
+            purchasers = database.fetch_purchasers()
+            self.data_loaded.emit(rows, total, purchasers)
+        except Exception as e:
+            print(f"Data loading failed: {e}")
+            self.data_loaded.emit([], 0, [])
+
 class RecommendationWidget(QWidget):
     def __init__(self):
         super().__init__()
+        self.page_size = 50
+        self.current_page = 1
+        self.total_count = 0
+        self.loading = False
         self.setup_ui()
         self.load_data()
 
@@ -30,11 +52,11 @@ class RecommendationWidget(QWidget):
         search_layout.addWidget(QLabel("采购标的:"))
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("输入采购标的关键字搜索...")
-        self.search_input.returnPressed.connect(self.load_data)
+        self.search_input.returnPressed.connect(self.on_search)
         search_layout.addWidget(self.search_input)
         
         self.btn_search = QPushButton("搜索")
-        self.btn_search.clicked.connect(self.load_data)
+        self.btn_search.clicked.connect(self.on_search)
         search_layout.addWidget(self.btn_search)
         
         search_layout.addStretch()
@@ -91,6 +113,20 @@ class RecommendationWidget(QWidget):
         
         layout.addWidget(self.table)
         
+        # Pagination
+        page_layout = QHBoxLayout()
+        self.lbl_page_info = QLabel("共 0 条，第 1/1 页")
+        self.btn_prev = QPushButton("上一页")
+        self.btn_next = QPushButton("下一页")
+        self.btn_prev.clicked.connect(self.prev_page)
+        self.btn_next.clicked.connect(self.next_page)
+        
+        page_layout.addStretch()
+        page_layout.addWidget(self.lbl_page_info)
+        page_layout.addWidget(self.btn_prev)
+        page_layout.addWidget(self.btn_next)
+        layout.addLayout(page_layout)
+        
         self.setStyleSheet("""
             QPushButton { padding: 6px 12px; border-radius: 4px; }
             QPushButton#primary { background-color: #2F80ED; color: white; font-weight: bold; }
@@ -103,18 +139,63 @@ class RecommendationWidget(QWidget):
             QHeaderView::section { background-color: #F3F4F6; padding: 6px; border: none; font-weight: bold; }
         """)
 
+    def on_search(self):
+        self.current_page = 1
+        self.load_data()
+
+    def prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.load_data()
+
+    def next_page(self):
+        max_page = (self.total_count + self.page_size - 1) // self.page_size
+        if self.current_page < max_page:
+            self.current_page += 1
+            self.load_data()
+
     def load_data(self):
+        if self.loading:
+            return
+        self.loading = True
+        self.table.setEnabled(False)
+        self.btn_search.setEnabled(False)
+        self.lbl_page_info.setText("加载中...")
+        
         filter_text = self.search_input.text().strip() if hasattr(self, 'search_input') else None
-        rows = database.fetch_recommendations(filter_text)
-        purchasers = database.fetch_purchasers()
+        offset = (self.current_page - 1) * self.page_size
+        
+        self.loader = DataLoader(filter_text, self.page_size, offset)
+        self.loader.data_loaded.connect(self.on_data_loaded)
+        self.loader.finished.connect(lambda: self.cleanup_loader())
+        self.loader.start()
+
+    def cleanup_loader(self):
+        self.loading = False
+        self.table.setEnabled(True)
+        self.btn_search.setEnabled(True)
+        self.loader.deleteLater()
+        self.loader = None
+
+    def on_data_loaded(self, rows, total_count, purchasers):
+        self.total_count = total_count
+        max_page = (total_count + self.page_size - 1) // self.page_size
+        if max_page < 1: max_page = 1
+        self.lbl_page_info.setText(f"共 {total_count} 条，第 {self.current_page}/{max_page} 页")
+        
+        self.btn_prev.setEnabled(self.current_page > 1)
+        self.btn_next.setEnabled(self.current_page < max_page)
+
         self.table.setRowCount(0)
+        start_seq = (self.current_page - 1) * self.page_size + 1
+        
         for i, row in enumerate(rows):
             # row: id, item_name, plan_release, weight, is_active
             r = self.table.rowCount()
             self.table.insertRow(r)
             
             # 序号
-            item_seq = QTableWidgetItem(str(i + 1))
+            item_seq = QTableWidgetItem(str(start_seq + i))
             item_seq.setData(Qt.UserRole, row[0]) # Store ID
             self.table.setItem(r, 0, item_seq)
             self.table.item(r, 0).setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable) # Read-only
@@ -161,7 +242,8 @@ class RecommendationWidget(QWidget):
         self.table.insertRow(r)
         
         # 序号
-        item_seq = QTableWidgetItem(str(r + 1))
+        start_seq = (self.current_page - 1) * self.page_size + 1
+        item_seq = QTableWidgetItem(str(start_seq + r))
         item_seq.setData(Qt.UserRole, None) # No ID for new row
         self.table.setItem(r, 0, item_seq)
         self.table.item(r, 0).setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -216,8 +298,8 @@ class RecommendationWidget(QWidget):
                 return
             
         # Re-number sequences
+        start_seq = (self.current_page - 1) * self.page_size + 1
         for r in range(self.table.rowCount()):
-            self.table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
             # Preserve ID? No, the items shifted, but we need to ensure the ID is still attached to the row.
             # QTableWidget shifts items automatically when removing rows.
             # But we are creating NEW QTableWidgetItem for column 0 in this loop:
@@ -227,10 +309,10 @@ class RecommendationWidget(QWidget):
             # FIX: Get existing item, update text, keep data.
             old_item = self.table.item(r, 0)
             if old_item:
-                old_item.setText(str(r + 1))
+                old_item.setText(str(start_seq + r))
             else:
                 # Should not happen usually, but if so:
-                new_item = QTableWidgetItem(str(r + 1))
+                new_item = QTableWidgetItem(str(start_seq + r))
                 self.table.setItem(r, 0, new_item)
 
     def on_method_changed(self, row, text):
@@ -399,7 +481,8 @@ class RecommendationWidget(QWidget):
                 self.table.insertRow(r)
                 
                 # 序号
-                item_seq = QTableWidgetItem(str(r + 1))
+                start_seq = (self.current_page - 1) * self.page_size + 1
+                item_seq = QTableWidgetItem(str(start_seq + r))
                 item_seq.setData(Qt.UserRole, None)
                 self.table.setItem(r, 0, item_seq)
                 self.table.item(r, 0).setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)

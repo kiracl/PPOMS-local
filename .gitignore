@@ -42,3 +42,4 @@ Thumbs.db
 
 # User uploaded files
 **/审批单据/
+*.log

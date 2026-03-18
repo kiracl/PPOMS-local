@@ -4,6 +4,7 @@ import database
 from datetime import datetime
 import difflib
 import uuid
+import xlrd # For .xls support in packaged app
 
 def import_historical_quotes(file_path: str):
     """

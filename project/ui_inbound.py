@@ -407,15 +407,12 @@ class InboundManagerWidget(QWidget):
             return
             
         try:
+            # Generate inbound no ONCE for the batch
+            cat_text = "半成品" # Fallback or needs fetch
+            inbound_no = database.get_next_inbound_number(date_yyMMdd, cat_text)
+            
             saved_count = 0
             for item in to_save:
-                # Generate inbound no
-                # We can use same category for all, assuming mixed types is handled by generic code or mapped
-                # Here we default to 'GEN' or map from something.
-                # Let's use generic 'MP' or map from contract category if we had it.
-                cat_text = "半成品" # Fallback or needs fetch
-                inbound_no = database.get_next_inbound_number(date_yyMMdd, cat_text)
-                
                 sp = item['sp_data']
                 
                 db_data = {
@@ -436,7 +433,7 @@ class InboundManagerWidget(QWidget):
                 database.save_inbound_order(db_data)
                 saved_count += 1
                 
-            QMessageBox.information(self, "成功", f"成功生成 {saved_count} 条入库单")
+            QMessageBox.information(self, "成功", f"成功生成 {saved_count} 条入库记录 (单号: {inbound_no})")
             self.clear_form()
             self.load_history()
             

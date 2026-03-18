@@ -403,7 +403,43 @@ def _init_schema(conn: sqlite3.Connection):
 
 
 def _migrate_schema(conn: sqlite3.Connection):
+    _remove_inbound_no_unique_constraint(conn)
     cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quote_audit_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            created_at TEXT,
+            status TEXT DEFAULT '未审核',
+            remark TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quote_audit_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER,
+            detail_no TEXT,
+            order_number TEXT,
+            demand_unit TEXT,
+            item_name TEXT,
+            spec_model TEXT,
+            unit TEXT,
+            qty REAL,
+            budget REAL,
+            purchase_method TEXT,
+            purchase_channel TEXT,
+            plan_release TEXT,
+            inquiry_price REAL,
+            audit_price REAL,
+            remark TEXT,
+            FOREIGN KEY(record_id) REFERENCES quote_audit_records(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
     # Ensure core tables exist (idempotent)
     cur.execute(
         """
@@ -652,6 +688,24 @@ def _migrate_schema(conn: sqlite3.Connection):
     if cnt == 0:
         cur.executemany("INSERT INTO plan_months(name) VALUES(?)", [("2601",), ("2602",), ("2603",)])
         conn.commit()
+
+    # --- Monthly Plans Table ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS monthly_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_month TEXT,
+            item_name TEXT,
+            spec_model TEXT,
+            unit TEXT,
+            plan_qty REAL,
+            plan_budget REAL,
+            department TEXT,
+            remarks TEXT
+        )
+        """
+    )
+    conn.commit()
 
     # --- Inbound Management Tables ---
     cur.execute(
@@ -1005,6 +1059,56 @@ def _migrate_schema(conn: sqlite3.Connection):
     )
     conn.commit()
 
+    # --- NEW TABLES MIGRATION: AI Config ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_config (
+            config_key TEXT PRIMARY KEY,
+            provider TEXT,
+            base_url TEXT,
+            api_key TEXT,
+            model_name TEXT,
+            system_prompt TEXT
+        )
+        """
+    )
+    conn.commit()
+
+    # --- NEW TABLES MIGRATION: Knowledge Base ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_docs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT,
+            filepath TEXT,
+            doc_type TEXT,
+            upload_time TEXT,
+            chunk_count INTEGER DEFAULT 0
+        )
+        """
+    )
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER,
+            chunk_index INTEGER,
+            content TEXT,
+            FOREIGN KEY(doc_id) REFERENCES knowledge_docs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+    
+    # Try to enable FTS5 if available
+    try:
+        cur.execute("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content, doc_id UNINDEXED)")
+        conn.commit()
+    except Exception as e:
+        # Fallback if FTS5 is not enabled in SQLite build (though usually it is)
+        print(f"Warning: FTS5 not supported: {e}")
 
 def init_db():
     ensure_db()
@@ -2935,7 +3039,7 @@ def get_workbench_stats(yymm_filter: str):
         conn.close()
 
 
-def fetch_recommendations(filter_text=None):
+def fetch_recommendations(filter_text=None, limit=None, offset=None):
     conn = _connect()
     try:
         cur = conn.cursor()
@@ -2944,9 +3048,24 @@ def fetch_recommendations(filter_text=None):
         if filter_text:
             sql += " AND item_name LIKE ?"
             params.append(f"%{filter_text}%")
+        
+        # Get total count for pagination
+        count_sql = "SELECT COUNT(*) FROM recommendations WHERE 1=1"
+        count_params = []
+        if filter_text:
+            count_sql += " AND item_name LIKE ?"
+            count_params.append(f"%{filter_text}%")
+        cur.execute(count_sql, count_params)
+        total_count = cur.fetchone()[0]
+
         sql += " ORDER BY id"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.append(limit)
+            params.append(offset if offset else 0)
+            
         cur.execute(sql, params)
-        return cur.fetchall()
+        return cur.fetchall(), total_count
     finally:
         conn.close()
 
@@ -4309,5 +4428,173 @@ def save_table_column_width(table_key: str, col_index: int, width: int):
             (table_key, col_index, width)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+def _remove_inbound_no_unique_constraint(conn: sqlite3.Connection):
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='inbound_orders'")
+        row = cur.fetchone()
+        if not row: return
+        
+        sql = row[0]
+        if "inbound_no TEXT UNIQUE" in sql:
+            # print("Migrating inbound_orders to remove UNIQUE constraint...")
+            cur.execute("ALTER TABLE inbound_orders RENAME TO inbound_orders_old")
+            new_sql = sql.replace("inbound_no TEXT UNIQUE", "inbound_no TEXT")
+            cur.execute(new_sql)
+            cur.execute("INSERT INTO inbound_orders SELECT * FROM inbound_orders_old")
+            cur.execute("DROP TABLE inbound_orders_old")
+            conn.commit()
+    except Exception as e:
+        print(f"Migration failed: {e}")
+        pass
+
+def get_ai_config(config_key='default'):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT provider, base_url, api_key, model_name, system_prompt FROM ai_config WHERE config_key=?", (config_key,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "provider": row[0],
+                "base_url": row[1],
+                "api_key": row[2],
+                "model_name": row[3],
+                "system_prompt": row[4]
+            }
+        return None
+    finally:
+        conn.close()
+
+def save_ai_config(config_key, provider, base_url, api_key, model_name, system_prompt):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO ai_config (config_key, provider, base_url, api_key, model_name, system_prompt)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(config_key) DO UPDATE SET
+                provider=excluded.provider,
+                base_url=excluded.base_url,
+                api_key=excluded.api_key,
+                model_name=excluded.model_name,
+                system_prompt=excluded.system_prompt
+            """,
+            (config_key, provider, base_url, api_key, model_name, system_prompt)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def create_quote_audit_record(name, created_at=None, status='未审核', remark=''):
+    if not created_at:
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO quote_audit_records (name, created_at, status, remark) VALUES (?, ?, ?, ?)",
+            (name, created_at, status, remark)
+        )
+        conn.commit()
+        return cur.lastrowid
+    except Exception as e:
+        print(f"Error creating quote audit record: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_quote_audit_records():
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, created_at, status, remark FROM quote_audit_records ORDER BY created_at DESC")
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def delete_quote_audit_record(record_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM quote_audit_records WHERE id = ?", (record_id,))
+        cur.execute("DELETE FROM quote_audit_details WHERE record_id = ?", (record_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error deleting quote audit record: {e}")
+        return False
+    finally:
+        conn.close()
+
+def add_quote_audit_details(record_id, details):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for d in details:
+            cur.execute(
+                """
+                INSERT INTO quote_audit_details (
+                    record_id, detail_no, order_number, demand_unit, item_name, spec_model, 
+                    unit, qty, budget, purchase_method, purchase_channel, plan_release, 
+                    inquiry_price, audit_price, remark
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id, d.get('detail_no', ''), d.get('order_number', ''), d.get('demand_unit', ''),
+                    d.get('item_name', ''), d.get('spec_model', ''), d.get('unit', ''),
+                    d.get('qty', 0), d.get('budget', 0), d.get('purchase_method', ''),
+                    d.get('purchase_channel', ''), d.get('plan_release', ''),
+                    d.get('inquiry_price', 0), d.get('audit_price', 0), d.get('remark', '')
+                )
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error adding quote audit details: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_quote_audit_details(record_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, detail_no, order_number, demand_unit, item_name, spec_model, 
+                   unit, qty, budget, purchase_method, purchase_channel, plan_release, 
+                   inquiry_price, audit_price, remark 
+            FROM quote_audit_details 
+            WHERE record_id = ?
+            ORDER BY id ASC
+            """,
+            (record_id,)
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def update_quote_audit_status(record_id, status):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE quote_audit_records SET status = ? WHERE id = ?", (status, record_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def update_quote_audit_detail_price(detail_id, audit_price):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE quote_audit_details SET audit_price = ? WHERE id = ?", (audit_price, detail_id))
+        conn.commit()
+        return True
     finally:
         conn.close()

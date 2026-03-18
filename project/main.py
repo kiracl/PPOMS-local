@@ -14,12 +14,13 @@ from ui_plan_release import PlanReleaseForm
 from ui_recommendation import RecommendationWidget
 from ui_monthly_plan import MonthlyPlanWidget
 from ui_data_manager import DataManagerWidget
-from ui_plan_export import PlanExportWidget
+from ui_price_audit import PriceAuditModule
 from ui_plan_search import PlanSearchWidget
 from ui_contract import ContractManagerWidget
 from ui_inbound import InboundManagerWidget
 from ui_invoice import InvoiceManagerWidget
 from ui_settlement import SettlementModule
+from ui_ai_assistant import AiAssistantModule
 import database
 from print import export_order_pdf
 
@@ -27,7 +28,7 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V2.6.0213")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V3.2.0221")
         
         # Main Container
         container = QWidget()
@@ -63,7 +64,7 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("月度计划")
         self.sidebar.addItem("采购计划")
         self.sidebar.addItem("计划发放")
-        self.sidebar.addItem("计划导出")
+        self.sidebar.addItem("价格审核")
         self.sidebar.addItem("计划检索")
         self.sidebar.addItem("自动推荐")
         self.sidebar.addItem("合同管理")
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("发票管理")
         self.sidebar.addItem("结算办理")
         self.sidebar.addItem("数据管理")
+        self.sidebar.addItem("AI 智能助手")
         main_layout.addWidget(self.sidebar)
         
         # Right Content Area
@@ -101,9 +103,9 @@ class MainWindow(QMainWindow):
         self.plan_release = PlanReleaseForm(self)
         self.right_stack.addWidget(self.plan_release)
         
-        # 5. Plan Export Page (Index 4)
-        self.plan_export = PlanExportWidget()
-        self.right_stack.addWidget(self.plan_export)
+        # 5. Price Audit Page (Index 4)
+        self.price_audit = PriceAuditModule()
+        self.right_stack.addWidget(self.price_audit)
         
         # 5.5 Plan Search Page (Index 5)
         self.plan_search = PlanSearchWidget()
@@ -133,6 +135,10 @@ class MainWindow(QMainWindow):
         # 11. Data Manager Page (Index 11)
         self.data_manager = DataManagerWidget()
         self.right_stack.addWidget(self.data_manager)
+
+        # 12. AI Assistant Page (Index 12)
+        self.ai_assistant = AiAssistantModule()
+        self.right_stack.addWidget(self.ai_assistant)
         
         # Connect Sidebar
         self.sidebar.currentRowChanged.connect(self.on_sidebar_changed)
@@ -183,7 +189,7 @@ class MainWindow(QMainWindow):
         elif index == 3:
             self.plan_release.load_data()
         elif index == 4:
-            self.plan_export.load_months()
+            self.price_audit.plan_export.load_months()
         elif index == 5:
             self.plan_search.load_data()
         elif index == 6:
@@ -199,6 +205,9 @@ class MainWindow(QMainWindow):
             self.settlement_module.settlement_tab.refresh_data()
         elif index == 11:
             self.data_manager.load_backups()
+        elif index == 12:
+            # AI Module loaded
+            pass
 
     def get_display_name(self, path):
         if not path:

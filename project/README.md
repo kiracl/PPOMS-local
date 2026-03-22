@@ -33,6 +33,24 @@ python cli.py order create --month 2603 --category MPJ --unit "信息部" --name
 # 预期输出: SUCCESS: Order created. Number: CG-2603MPJ0001
 ```
 
+#### 2. 添加采购明细 (Add Detail Item)
+向指定的主单中添加一条物资明细。系统会自动分配递增的序号（如 `2603MPJ-1`），并触发**智能推荐**（自动填充采购方式、采购途径、发放人）。
+
+**命令格式：**
+```bash
+python cli.py order add-item --order <主单编号> --name <采购标的> --spec <规格型号> --qty <采购数量> --unit <单位> [--price <单价>] [--remark <备注>]
+```
+
+**示例：**
+```bash
+python cli.py order add-item --order CG-2603MPJ0001 --name "笔记本电脑" --spec "ThinkPad T14" --qty 5 --unit "台" --price 8500
+# 预期输出: 
+# SUCCESS: Item added. Sequence: 2603MPJ-1
+#   Details: Name=笔记本电脑, Method=框架协议, Channel=能建商城, Purchaser=李胜
+```
+
+> **注意：** `--price` 和 `--remark` 为选填项。
+
 #### 3. 批量更新进度状态 (Update Progress Status)
 将指定的采购明细更新为目标进度状态。
 

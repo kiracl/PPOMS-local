@@ -130,7 +130,7 @@ python cli.py order create --month <计划月份> --category <类别代码> --un
 ```
 **示例：**
 ```bash
-python cli.py order create --month 2603 --category MPJ --unit "信息部" --name "3月服务器采购"
+python cli.py order create --month 2603 --category MPJ --unit "生产管理部" --name "3月服务器采购"
 # 预期输出: SUCCESS: Order created. Number: CG-2603MPJ0001
 ```
 

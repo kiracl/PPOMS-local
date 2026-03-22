@@ -251,7 +251,7 @@ class AiConfigWidget(QWidget):
         form_layout = QFormLayout(form_group)
         
         self.combo_provider = QComboBox()
-        self.combo_provider.addItems(["DeepSeek", "OpenAI", "Ollama (本地)", "自定义"])
+        self.combo_provider.addItems(["DeepSeek", "Moonshot (Kimi)", "OpenAI", "Ollama (本地)", "自定义"])
         self.combo_provider.currentTextChanged.connect(self.on_provider_changed)
         
         self.edit_base_url = QLineEdit()
@@ -290,6 +290,9 @@ class AiConfigWidget(QWidget):
         if text == "DeepSeek":
             self.edit_base_url.setText("https://api.deepseek.com/v1")
             self.edit_model.setText("deepseek-chat")
+        elif text == "Moonshot (Kimi)":
+            self.edit_base_url.setText("https://api.moonshot.cn/v1")
+            self.edit_model.setText("moonshot-v1-8k")
         elif text == "OpenAI":
             self.edit_base_url.setText("https://api.openai.com/v1")
             self.edit_model.setText("gpt-3.5-turbo")

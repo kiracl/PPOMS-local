@@ -33,23 +33,22 @@ python cli.py order create --month 2603 --category MPJ --unit "信息部" --name
 # 预期输出: SUCCESS: Order created. Number: CG-2603MPJ0001
 ```
 
-#### 2. 添加采购明细 (Add Detail Item)
-向指定的主单中添加一条物资明细。系统会自动分配递增的序号（如 `2603MPJ-1`），并触发**智能推荐**（自动填充采购方式、采购途径、发放人）。
+#### 3. 批量更新进度状态 (Update Progress Status)
+将指定的采购明细更新为目标进度状态。
 
 **命令格式：**
 ```bash
-python cli.py order add-item --order <主单编号> --name <采购标的> --spec <规格型号> --qty <采购数量> --unit <单位> [--price <单价>] [--remark <备注>]
+python cli.py order update-status --status "<目标状态>" --details <明细编号1> <明细编号2> ...
 ```
+> **注意：** 可选状态包括：未启动、询价中、定点审批中、合同流转中、已下单待收货、部分到货、已完成。
 
 **示例：**
 ```bash
-python cli.py order add-item --order CG-2603MPJ0001 --name "笔记本电脑" --spec "ThinkPad T14" --qty 5 --unit "台" --price 8500
+python cli.py order update-status --status "询价中" --details 2603MPJ-1 2603MPJ-2
 # 预期输出: 
-# SUCCESS: Item added. Sequence: 2603MPJ-1
-#   Details: Name=笔记本电脑, Method=框架协议, Channel=能建商城, Purchaser=李胜
+# SUCCESS: Updated 2 items to status '询价中'.
+#   Updated items: 2603MPJ-1, 2603MPJ-2
 ```
-
-> **注意：** `--price` 和 `--remark` 为选填项。
 
 ## 项目文档
 详细的产品需求、数据库设计和架构文档请参考 `docs/` 目录：

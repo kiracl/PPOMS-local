@@ -6,6 +6,10 @@ from datetime import datetime
 
 ALLOWED_METHODS = ["", "询比采购", "公开招标", "集中采购", "框架协议"]
 ALLOWED_CHANNELS = ["", "能建商城", "采购平台", "线下采购"]
+STATUS_OPTIONS = [
+    "未启动", "询价中", "定点审批中", "合同流转中", 
+    "已下单待收货", "部分到货", "已完成"
+]
 
 def get_db_connection():
     return sqlite3.connect(database.DB_PATH)
@@ -142,6 +146,50 @@ def cmd_add_item(args):
     finally:
         conn.close()
 
+def cmd_update_progress(args):
+    """更新明细进度状态 (Update Detail Progress Status)"""
+    detail_nos = args.details
+    status = args.status
+    
+    if not detail_nos:
+        print("Error: No detail numbers provided.")
+        return
+        
+    if status not in STATUS_OPTIONS:
+        print(f"Error: Invalid status '{status}'. Allowed options: {', '.join(STATUS_OPTIONS)}")
+        return
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # First, find the IDs for these detail numbers
+        placeholders = ",".join(["?"] * len(detail_nos))
+        sql_find = f"SELECT id, detail_no FROM order_details WHERE detail_no IN ({placeholders})"
+        cursor.execute(sql_find, detail_nos)
+        rows = cursor.fetchall()
+        
+        found_ids = [r[0] for r in rows]
+        found_nos = [r[1] for r in rows]
+        
+        missing = set(detail_nos) - set(found_nos)
+        if missing:
+            print(f"Warning: The following detail numbers were not found: {', '.join(missing)}")
+            
+        if not found_ids:
+            print("Error: No valid detail numbers found to update.")
+            return
+            
+        # Update using the batch function from database
+        database.update_detail_status_batch(found_ids, status)
+        print(f"SUCCESS: Updated {len(found_ids)} items to status '{status}'.")
+        print(f"  Updated items: {', '.join(found_nos)}")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        conn.close()
+
 def main():
     parser = argparse.ArgumentParser(description="Purchase Plan CLI 2.0")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -167,6 +215,11 @@ def main():
     cmd_add.add_argument("--price", help="Unit Price")
     cmd_add.add_argument("--remark", help="Remark")
     
+    # Subcommand: order update-status
+    cmd_update = order_subparsers.add_parser("update-status", help="Update progress status for detail items")
+    cmd_update.add_argument("--status", required=True, help=f"Target status. Allowed: {', '.join(STATUS_OPTIONS)}")
+    cmd_update.add_argument("--details", nargs='+', required=True, help="One or more Detail Numbers (e.g., 2603MPJ-1 2603MPJ-2)")
+    
     args = parser.parse_args()
     
     if args.command == "order":
@@ -174,6 +227,8 @@ def main():
             cmd_create_order(args)
         elif args.subcommand == "add-item":
             cmd_add_item(args)
+        elif args.subcommand == "update-status":
+            cmd_update_progress(args)
         else:
             parser_order.print_help()
     else:

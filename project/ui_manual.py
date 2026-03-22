@@ -165,9 +165,11 @@ class UserManualWidget(QWidget):
         # Header
         header_frame = QFrame()
         header_frame.setStyleSheet("background-color: #f8f9fa; border-bottom: 1px solid #dee2e6;")
+        header_frame.setMaximumHeight(50)  # Restrict header height to avoid large whitespace
         header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(15, 0, 15, 0) # Reduce vertical margins in header
         title = QLabel("📖 系统操作手册")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #2c3e50;")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2c3e50;")
         header_layout.addWidget(title)
         self.layout.addWidget(header_frame)
         

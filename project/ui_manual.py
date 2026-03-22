@@ -196,7 +196,7 @@ class UserManualWidget(QWidget):
             QTextBrowser {
                 border: none;
                 background-color: #ffffff;
-                padding: 20px;
+                padding: 10px;
                 font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
             }
         """)
@@ -204,7 +204,7 @@ class UserManualWidget(QWidget):
         splitter.addWidget(self.tree)
         splitter.addWidget(self.browser)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(1, 5)
         
         self.layout.addWidget(splitter)
         
@@ -237,15 +237,29 @@ class UserManualWidget(QWidget):
         <html>
         <head>
         <style>
-            body {{ font-family: 'Microsoft YaHei', sans-serif; color: #333; line-height: 1.6; font-size: 14px; }}
-            h1 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px; font-size: 24px; }}
-            h2 {{ color: #34495e; margin-top: 20px; font-size: 20px; }}
-            h3 {{ color: #0d6efd; font-size: 16px; }}
+            body {{ 
+                font-family: 'Microsoft YaHei', sans-serif; 
+                color: #333; 
+                line-height: 1.5; 
+                font-size: 14px; 
+                margin: 0; 
+                padding: 0; 
+            }}
+            h1 {{ 
+                color: #2c3e50; 
+                border-bottom: 2px solid #eee; 
+                padding-bottom: 5px; 
+                font-size: 22px; 
+                margin-top: 0; 
+            }}
+            h2 {{ color: #34495e; margin-top: 15px; font-size: 18px; }}
+            h3 {{ color: #0d6efd; font-size: 15px; margin-top: 10px; }}
+            p {{ margin-top: 5px; margin-bottom: 10px; }}
             code {{ background-color: #f1f3f5; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; color: #d63384; }}
-            pre {{ background-color: #f8f9fa; padding: 15px; border-radius: 6px; overflow-x: auto; border: 1px solid #e9ecef; }}
+            pre {{ background-color: #f8f9fa; padding: 10px; border-radius: 6px; overflow-x: auto; border: 1px solid #e9ecef; margin-top: 5px; margin-bottom: 10px; }}
             pre code {{ background-color: transparent; color: #212529; padding: 0; }}
-            ul {{ padding-left: 20px; }}
-            li {{ margin-bottom: 5px; }}
+            ul {{ padding-left: 20px; margin-top: 5px; margin-bottom: 10px; }}
+            li {{ margin-bottom: 3px; }}
             a {{ color: #0d6efd; text-decoration: none; }}
             a:hover {{ text-decoration: underline; }}
         </style>

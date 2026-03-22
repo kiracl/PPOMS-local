@@ -22,6 +22,7 @@ from ui_invoice import InvoiceManagerWidget
 from ui_settlement import SettlementModule
 from ui_ai_assistant import AiAssistantModule
 from ui_progress import ProgressWidget
+from ui_manual import UserManualWidget
 
 import database
 from print import export_order_pdf
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("结算办理")
         self.sidebar.addItem("数据管理")
         self.sidebar.addItem("AI 智能助手")
+        self.sidebar.addItem("操作手册")
         main_layout.addWidget(self.sidebar)
         
         # Right Content Area
@@ -145,6 +147,10 @@ class MainWindow(QMainWindow):
         # 12. AI Assistant Page (Index 12)
         self.ai_assistant = AiAssistantModule()
         self.right_stack.addWidget(self.ai_assistant)
+        
+        # 13. User Manual Page (Index 14)
+        self.user_manual = UserManualWidget()
+        self.right_stack.addWidget(self.user_manual)
         
         # Connect Sidebar
         self.sidebar.currentRowChanged.connect(self.on_sidebar_changed)
@@ -216,6 +222,9 @@ class MainWindow(QMainWindow):
             self.data_manager.load_backups()
         elif index == 13:
             # AI Module loaded
+            pass
+        elif index == 14:
+            # User Manual loaded
             pass
 
     def get_display_name(self, path):

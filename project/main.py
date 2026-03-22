@@ -21,6 +21,8 @@ from ui_inbound import InboundManagerWidget
 from ui_invoice import InvoiceManagerWidget
 from ui_settlement import SettlementModule
 from ui_ai_assistant import AiAssistantModule
+from ui_progress import ProgressWidget
+
 import database
 from print import export_order_pdf
 
@@ -28,7 +30,7 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V3.2.0221")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V3.3.0318")
         
         # Main Container
         container = QWidget()
@@ -67,6 +69,7 @@ class MainWindow(QMainWindow):
         self.sidebar.addItem("价格审核")
         self.sidebar.addItem("计划检索")
         self.sidebar.addItem("自动推荐")
+        self.sidebar.addItem("计划进度")
         self.sidebar.addItem("合同管理")
         self.sidebar.addItem("入库管理")
         self.sidebar.addItem("发票管理")
@@ -115,6 +118,9 @@ class MainWindow(QMainWindow):
         # 6. Recommendation Page (Index 6)
         self.recommendation = RecommendationWidget()
         self.right_stack.addWidget(self.recommendation)
+        
+        self.progress_module = ProgressWidget()
+        self.right_stack.addWidget(self.progress_module)
         
         # 7. Contract Manager Page (Index 7)
         self.contract_manager = ContractManagerWidget()
@@ -195,17 +201,20 @@ class MainWindow(QMainWindow):
         elif index == 6:
             self.recommendation.load_data()
         elif index == 7:
-            self.contract_manager.load_data()
+            if hasattr(self.progress_module, 'load_data'):
+                self.progress_module.load_data()
         elif index == 8:
-            self.inbound_manager.load_history()
+            self.contract_manager.load_data()
         elif index == 9:
-            self.invoice_manager.load_data()
+            self.inbound_manager.load_history()
         elif index == 10:
+            self.invoice_manager.load_data()
+        elif index == 11:
             self.settlement_module.reconciliation_tab.refresh_data()
             self.settlement_module.settlement_tab.refresh_data()
-        elif index == 11:
-            self.data_manager.load_backups()
         elif index == 12:
+            self.data_manager.load_backups()
+        elif index == 13:
             # AI Module loaded
             pass
 

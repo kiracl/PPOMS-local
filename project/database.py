@@ -1221,7 +1221,7 @@ def fetch_order_details(order_number: str):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT detail_no, item_name, purchase_item, spec_model, purchase_cycle, stock_count, purchase_qty, unit, unit_price, budget_wan, purchase_method, purchase_channel, plan_time, demand_unit, plan_release, progress_req, supplier, inquiry_price, tax_rate, actual_status, purchase_body, add_adjust, remark FROM order_details WHERE order_number=?",
+            "SELECT detail_no, item_name, purchase_item, spec_model, purchase_cycle, stock_count, purchase_qty, unit, unit_price, budget_wan, purchase_method, purchase_channel, plan_time, demand_unit, plan_release, progress_req, supplier, inquiry_price, tax_rate, actual_status, purchase_body, add_adjust, remark, id FROM order_details WHERE order_number=?",
             (order_number,),
         )
         rows = cur.fetchall()
@@ -1798,6 +1798,106 @@ def fetch_purchasers():
         return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
+
+def fetch_all_released_plans(month_filter=None, purchaser_filter=None):
+    """
+    Fetch all released plan details across all orders.
+    Returns: list of dicts with combined order and detail info.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                o.number, o.task_name, o.yymm,
+                d.id, d.detail_no, d.purchase_item, d.spec_model, d.purchase_qty, d.unit, 
+                d.plan_release, d.actual_status
+            FROM orders o
+            JOIN order_details d ON o.number = d.order_number
+            WHERE d.plan_release IS NOT NULL 
+              AND d.plan_release != '' 
+              AND d.plan_release != '未分配'
+        """
+        params = []
+        
+        if month_filter and month_filter != "全部":
+            sql += " AND o.yymm = ?"
+            params.append(month_filter)
+            
+        if purchaser_filter and purchaser_filter != "全部":
+            sql += " AND d.plan_release = ?"
+            params.append(purchaser_filter)
+            
+        sql += " ORDER BY o.yymm DESC, o.number DESC, d.id ASC"
+        
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        
+        results = []
+        for r in rows:
+            results.append({
+                "order_number": r[0],
+                "task_name": r[1],
+                "yymm": r[2],
+                "detail_id": r[3],
+                "detail_no": r[4],
+                "item_name": r[5],
+                "spec": r[6],
+                "qty": r[7],
+                "unit": r[8],
+                "purchaser": r[9],
+                "status": r[10] if r[10] else "未启动"
+            })
+        return results
+    finally:
+        conn.close()
+
+def update_detail_status_batch(detail_ids: list, new_status: str):
+    """
+    Batch update the actual_status of specific order details.
+    """
+    if not detail_ids:
+        return
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join(["?"] * len(detail_ids))
+        sql = f"UPDATE order_details SET actual_status = ? WHERE id IN ({placeholders})"
+        params = [new_status] + detail_ids
+        cur.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_progress_stats(month_filter=None, purchaser_filter=None):
+    """
+    Get aggregated stats for the dashboard.
+    Returns: total_count, completed_count, status_distribution (dict), purchaser_stats (dict)
+    """
+    plans = fetch_all_released_plans(month_filter, purchaser_filter)
+    
+    total = len(plans)
+    completed = 0
+    status_dist = {}
+    purchaser_stats = {}
+    
+    for p in plans:
+        st = p["status"]
+        purchaser = p["purchaser"]
+        
+        if st == "已完成":
+            completed += 1
+            
+        status_dist[st] = status_dist.get(st, 0) + 1
+        
+        if purchaser not in purchaser_stats:
+            purchaser_stats[purchaser] = {"total": 0, "completed": 0}
+            
+        purchaser_stats[purchaser]["total"] += 1
+        if st == "已完成":
+            purchaser_stats[purchaser]["completed"] += 1
+            
+    return total, completed, status_dist, purchaser_stats
 
 
 def add_purchaser(name: str) -> bool:

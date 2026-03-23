@@ -59,7 +59,15 @@
 
 ## 3. 辅助与支持系统
 
-### 3.1 智能 AI 助手 (AI Assistant)
+### 3.1 CLI 极客模式 (Command Line Interface)
+1.  **Web端 CLI 终端**:
+    *   **形式**: 在 Web 界面提供一个类似于命令行的终端窗口（使用 XTerm.js 或直接实现输入框交互）。
+    *   **功能**: 继承本地版的 CLI 逻辑，支持通过命令行快速执行操作（如 `order create`, `order add-item`, `order update-status`）。
+2.  **API 对接**:
+    *   **架构**: 前端终端输入的命令，解析后通过专门的 `/api/cli/execute` 接口发送到后端，后端复用业务逻辑进行处理并返回文本结果。
+    *   **权限**: CLI 操作同样受到登录用户的角色与数据权限限制。
+
+### 3.2 智能 AI 助手 (AI Assistant)
 1.  **多模型支持**:
     *   **引擎**: 支持 DeepSeek, Moonshot (Kimi), OpenAI, Ollama (本地部署), 及自定义大模型。
 2.  **业务赋能**:

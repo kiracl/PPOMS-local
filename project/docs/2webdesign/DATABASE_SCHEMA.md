@@ -104,10 +104,13 @@ CREATE TABLE `orders` (
   `category` varchar(20) DEFAULT NULL COMMENT '类别 (e.g. MPB)',
   `task_name` varchar(200) DEFAULT NULL COMMENT '任务名称',
   `unit` varchar(100) DEFAULT NULL COMMENT '需求单位',
+  `dept_id` bigint DEFAULT NULL COMMENT '所属部门ID (用于权限隔离)',
+  `creator_id` bigint DEFAULT NULL COMMENT '录入员ID',
+  `approval_report_path` varchar(255) DEFAULT NULL COMMENT '审批报告PDF路径',
   `date` date DEFAULT NULL COMMENT '订单日期',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`number`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='采购订单主表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='采购需求主单表';
 
 CREATE TABLE `order_details` (
   `id` bigint NOT NULL AUTO_INCREMENT,
@@ -121,7 +124,9 @@ CREATE TABLE `order_details` (
   `budget_wan` decimal(12,4) DEFAULT NULL COMMENT '预算(万)',
   `purchase_method` varchar(50) DEFAULT NULL COMMENT '采购方式',
   `purchase_channel` varchar(50) DEFAULT NULL COMMENT '采购渠道',
-  `plan_release` varchar(50) DEFAULT NULL COMMENT '计划下达人',
+  `plan_release` varchar(50) DEFAULT NULL COMMENT '计划下达人(采购员)',
+  `assign_status` varchar(20) DEFAULT '待分配' COMMENT '分配状态(待分配/已分配)',
+  `execute_status` varchar(20) DEFAULT '未发放' COMMENT '执行状态(未发放/跟进中/采购中/已入库)',
   `inquiry_price` varchar(50) DEFAULT NULL COMMENT '询价结果',
   `audit_price` varchar(50) DEFAULT NULL COMMENT '审核价格',
   `supplier` varchar(200) DEFAULT NULL COMMENT '供应商',
@@ -131,7 +136,7 @@ CREATE TABLE `order_details` (
   PRIMARY KEY (`id`),
   KEY `idx_order_number` (`order_number`),
   KEY `idx_detail_no` (`detail_no`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='采购订单明细表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='采购需求明细表';
 ```
 
 ### 3.3 任务分发 (release_orders)

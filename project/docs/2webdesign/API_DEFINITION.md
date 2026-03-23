@@ -150,3 +150,24 @@
 
 ### 6.2 知识库检索
 *   `POST /api/ai/knowledge/search` (body: { query: "合同审批流程" })
+
+## 7. CLI 接口模块 (Web Terminal)
+
+### 7.1 CLI 命令执行
+*   **URL**: `POST /api/cli/execute`
+*   **Request**:
+    ```json
+    {
+      "command": "order create --yymm 2603 --category MP --unit 生产部 --name 3月采购"
+    }
+    ```
+*   **Response**:
+    ```json
+    {
+      "code": 200,
+      "data": {
+        "output": "Success: 主单创建成功 (CG-2603MP-0001)\n",
+        "status": "success"
+      }
+    }
+    ```

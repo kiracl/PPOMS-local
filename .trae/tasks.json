@@ -1,0 +1,37 @@
+[
+  {
+    "label": "🌐 Web: ① 前端安装依赖",
+    "type": "shell",
+    "command": "cd project/frontend && npm install",
+    "group": "build",
+    "presentation": { "reveal": "always" }
+  },
+  {
+    "label": "🌐 Web: ② 前端启动服务 (Dev)",
+    "type": "shell",
+    "command": "cd project/frontend && npm run dev",
+    "group": "build",
+    "presentation": { "reveal": "always" }
+  },
+  {
+    "label": "☕ Web: ③ 后端编译与依赖安装",
+    "type": "shell",
+    "command": "cd project/backend && mvn clean install -DskipTests",
+    "group": "build",
+    "presentation": { "reveal": "always" }
+  },
+  {
+    "label": "☕ Web: ④ 后端启动服务",
+    "type": "shell",
+    "command": "cd project/backend/ppoms-bootstrap && mvn spring-boot:run",
+    "group": "build",
+    "presentation": { "reveal": "always" }
+  },
+  {
+    "label": "📦 Web: ⑤ 前后端统一打包检查",
+    "type": "shell",
+    "command": "cd project/frontend && npm run build && cd ../backend && mvn clean package -DskipTests",
+    "group": "build",
+    "presentation": { "reveal": "always" }
+  }
+]

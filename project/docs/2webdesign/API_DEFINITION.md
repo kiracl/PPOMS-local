@@ -60,30 +60,42 @@
 
 ## 3. 采购业务模块 (Purchase)
 
-### 3.1 月度计划 (Monthly Plan)
-*   **URL**: `/api/purchase/plans`
-*   **List**: `GET /api/purchase/plans` (params: page, size, month, status)
-*   **Detail**: `GET /api/purchase/plans/{id}`
-*   **Create**: `POST /api/purchase/plans`
+### 3.1 采购需求录入与审批 (Purchase Request)
+*   **URL**: `/api/purchase/requests`
+*   **List**: `GET /api/purchase/requests` (params: page, size, month, auditStatus)
+*   **Create**: `POST /api/purchase/requests` (支持上传审批报告 PDF，返回主单 number)
     ```json
     {
-      "planMonth": "202602",
+      "yymm": "2603",
+      "category": "MP",
+      "taskName": "3月工具采购",
+      "unit": "生产部",
+      "approvalReportPath": "/uploads/pdf/xxx.pdf",
       "items": [
-        { "itemName": "螺纹钢", "spec": "HRB400E", "qty": 100, "unit": "吨" }
+        { "itemName": "扳手", "specModel": "10寸", "purchaseQty": 10, "unit": "把" }
       ]
     }
     ```
-*   **Audit**: `POST /api/purchase/plans/{id}/audit` (body: { status: 1, comment: "同意" })
+*   **Audit**: `POST /api/purchase/requests/{number}/audit` 
+    *   body: `{ "action": "approve" | "reject", "remark": "退回原因" }`
+*   **Assign**: `POST /api/purchase/requests/assign` 
+    *   body: `{ "detailIds": [1,2], "purchaser": "张三" }`
+*   **Release**: `POST /api/purchase/requests/release` (发放计划，使采购员可见)
 
-### 3.2 采购订单 (Order)
-*   **URL**: `/api/purchase/orders`
-*   **List**: `GET /api/purchase/orders`
-*   **Create**: `POST /api/purchase/orders`
-*   **Detail**: `GET /api/purchase/orders/{id}`
-*   **Export**: `POST /api/purchase/orders/export` (返回 Excel 文件流)
+### 3.2 采购员任务池与进度 (Purchase Task)
+*   **List**: `GET /api/purchase/tasks` (仅返回当前登录采购员已被发放的明细)
+*   **Update Status**: `PUT /api/purchase/tasks/status`
+    ```json
+    {
+      "detailIds": [1, 2],
+      "executeStatus": "采购中",
+      "followUpRemark": "已联系供应商，预计下周发货"
+    }
+    ```
 
-### 3.3 供应商 (Supplier)
-*   `GET /api/purchase/suppliers/options` - 获取供应商下拉列表 (id, name)
+### 3.3 计划导出与打印
+*   `GET /api/purchase/export/monthly` (按月度/分类导出 Excel 文件流)
+*   `GET /api/purchase/print/{number}` (获取打印所需的数据结构)
 
 ## 4. 供应链模块 (Supply)
 

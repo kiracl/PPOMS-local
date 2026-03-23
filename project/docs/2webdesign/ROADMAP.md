@@ -1,5 +1,16 @@
 # PPOMS Web系统 - 开发路线图 (Roadmap V2.0)
 
+## Phase 0: 开发前准备与脚手架搭建 (Week 0)
+**目标**: 统一团队开发规范，搭建前后端项目骨架，准备开发环境。
+
+*   [ ] **技术选型确认**: 确认具体的组件版本（如 Spring Boot 3.2, Vue 3.4, Element Plus 2.5, MyBatis-Plus 3.5）。
+*   [ ] **脚手架生成**:
+    *   **后端**: 初始化 Maven Multi-module 工程 (`ppoms-server`, `ppoms-core`, `ppoms-plan` 等)。
+    *   **前端**: 使用 Vite 初始化 Vue 3 模板，配置 ESLint + Prettier + Husky 规范。
+*   [ ] **环境基建**: 在本地或开发服务器搭建 MySQL 8.0, Redis 6+ 环境。
+*   [ ] **CI/CD 初探**: 编写好基础的 `.gitignore`，初始化 Git 仓库。
+*   [ ] **统一响应处理**: 后端实现统一的 `Result<T>` 封装和全局异常拦截器 (`GlobalExceptionHandler`)。
+
 ## Phase 1: 基础设施与单机功能平移 (Week 1-3)
 **目标**: 搭建 Web 框架，将现有 PPOMS-local (PySide6) 的核心数据结构和逻辑完整迁移到 Web 端，单机/单租户运行。
 

@@ -107,6 +107,7 @@ CREATE TABLE `orders` (
   `dept_id` bigint DEFAULT NULL COMMENT '所属部门ID (用于权限隔离)',
   `creator_id` bigint DEFAULT NULL COMMENT '录入员ID',
   `approval_report_path` varchar(255) DEFAULT NULL COMMENT '审批报告PDF路径',
+  `audit_status` varchar(20) DEFAULT '草稿' COMMENT '审核状态(草稿/待审核/已退回/已审核)',
   `date` date DEFAULT NULL COMMENT '订单日期',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`number`)
@@ -131,6 +132,7 @@ CREATE TABLE `order_details` (
   `audit_price` varchar(50) DEFAULT NULL COMMENT '审核价格',
   `supplier` varchar(200) DEFAULT NULL COMMENT '供应商',
   `remark` text COMMENT '备注',
+  `follow_up_remark` text COMMENT '采购员跟进备注',
   `plan_time` date DEFAULT NULL COMMENT '计划时间',
   `tax_rate` varchar(20) DEFAULT NULL COMMENT '税率',
   PRIMARY KEY (`id`),

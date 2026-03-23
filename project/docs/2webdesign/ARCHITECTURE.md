@@ -1,28 +1,29 @@
 # PPOMS Web系统 架构设计文档 (V1.0)
 
 ## 1. 系统概述
-PPOMS (Procurement Production Operation Management System) Web版旨在将原有的桌面端单机应用升级为支持多用户、权限分离、前后端分离的企业级微服务应用。系统采用 **Java (Spring Boot/Cloud)** + **Vue 3** + **MySQL** 技术栈，实现采购全生命周期的数字化管理。
+PPOMS (Procurement Production Operation Management System) Web版旨在将原有的桌面端单机应用平滑升级为支持多用户、权限分离的企业级应用。
+**部署环境**: 生产环境搭建在 **Ubuntu** 操作系统上。
+**演进策略**: 考虑到系统功能庞大，系统架构采用 **微内核/模块化单体架构 (Modular Monolith)**，而非初期就上重型的微服务架构。通过模块解耦，实现**循序渐进、增量迭代**。新模块的上线通过打包脚本进行热插拔或平滑发布，确保绝不影响已上线模块的正常运行，并提供**一键回退**机制。
 
 ## 2. 技术架构
 
 ### 2.1 总体架构
-采用前后端分离架构，后端基于 Spring Cloud Alibaba 微服务体系（视规模可简化为 Spring Boot 单体模块化），前端基于 Vue 3 + Element Plus。
+采用前后端分离架构，后端基于 Spring Boot 3.x 采用模块化单体设计（方便后期向微服务拆分），前端基于 Vue 3 + Element Plus。
 
 *   **前端**: Vue 3, Vite, TypeScript, Pinia (状态管理), Element Plus (UI组件库), Echarts (数据可视化).
-*   **后端**: Java 17+, Spring Boot 3.x, MyBatis-Plus, Spring Security + JWT.
+*   **后端**: Java 17+, Spring Boot 3.x (Modular Monolith), MyBatis-Plus, Spring Security + JWT.
 *   **数据库**: MySQL 8.0 (继承自 SQLite 的平移结构).
 *   **缓存**: Redis (用于缓存 Token、字典数据、智能推荐规则).
-*   **消息队列**: RabbitMQ (可选，用于异步解耦，如审批通知、日志记录).
-*   **部署**: Docker + Kubernetes (或 Docker Compose).
+*   **部署环境**: Ubuntu Server 22.04 LTS 或更高版本.
+*   **发布管理**: 采用 Bash/Shell 脚本实现自动化打包、增量部署与快速回退。
 
-### 2.2 模块划分 (微服务/模块设计)
-1.  **认证中心 (Auth Service)**: 用户登录、JWT 签发与校验、权限管理 (RBAC).
-2.  **系统管理 (Admin Service)**: 用户、部门、角色、数据字典、智能推荐规则维护.
-3.  **采购计划服务 (Plan Service)**: 月度计划导入与对碰、采购申请、计划下达、CLI 接口转 REST API.
-4.  **执行与进度服务 (Progress Service)**: 计划状态流转、进度工作台汇总、批处理更新接口.
-5.  **合同与供应链服务 (Supply Service)**: 合同台账、执行订单、入库登记及状态联动.
-6.  **财务服务 (Finance Service)**: 发票管理、对账结算、付款记录.
-7.  **AI 网关服务 (AI Gateway)**: 统一对接 DeepSeek, Kimi, OpenAI, Ollama 等多模型引擎，提供业务层面的对话和数据查询能力.
+### 2.2 模块划分 (Modular Design)
+为支持增量迭代，后端代码按业务域严格划分模块（Maven/Gradle Multi-module）：
+1.  **Core 核心模块 (启动基石)**: 包含 Spring Security 认证、RBAC 权限管理、公共配置、日志拦截等。
+2.  **Plan 采购计划模块 (首批上线)**: 月度计划导入、采购申请、智能推荐字典、计划下达。
+3.  **Progress 进度与执行模块 (二期迭代)**: 计划状态流转、Echarts 进度大屏、树形级联更新。
+4.  **Supply 供应链模块 (三期迭代)**: 合同台账、执行订单、入库登记联动。
+5.  **AI Gateway 智能模块 (独立插件)**: 统一对接 DeepSeek/Kimi 等大模型，作为独立模块挂载。
 
 ## 3. 核心业务流程设计
 

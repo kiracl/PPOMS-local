@@ -2095,7 +2095,7 @@ def fetch_release_orders(number_filter=None, purchaser_filter=None, task_filter=
             sql += " AND o.unit LIKE ?"
             params.append(f"%{unit_filter}%")
             
-        sql += " ORDER BY r.id ASC"
+        sql += " ORDER BY r.release_date DESC, r.id DESC"
         cur.execute(sql, params)
         return cur.fetchall()
     finally:

@@ -582,10 +582,11 @@ class InboundManagerWidget(QWidget):
             return
             
         # Template columns
-        cols = ['入库单号', '入库日期', '订单编号', '规格型号', '入库数量', '仓储单号', '备注', '操作人']
+        cols = ['是否新增', '入库单号', '入库日期', '订单编号', '规格型号', '入库数量', '仓储单号', '备注', '操作人']
         df = pd.DataFrame(columns=cols)
         # Add sample
-        df.loc[0] = ['RK-SAMPLE-001', '2023-01-01', 'ORDER-001', 'SPEC-A', 100, 'WH-001', '导入测试', 'admin']
+        df.loc[0] = ['是', '', '2023-01-01', 'ORDER-001', 'SPEC-A', 100, 'WH-001', '新增测试(所有“是”的行共用1个新单号)', 'admin']
+        df.loc[1] = ['否', 'RK-SAMPLE-001', '2023-01-01', 'ORDER-001', 'SPEC-A', 100, 'WH-001', '更新测试(必须填入库单号)', 'admin']
         
         path, _ = QFileDialog.getSaveFileName(self, "保存模板", "入库导入模板.xlsx", "Excel Files (*.xlsx)")
         if path:
@@ -611,6 +612,7 @@ class InboundManagerWidget(QWidget):
             # Validate columns
             # Map Chinese to English
             col_map = {
+                '是否新增': 'is_new',
                 '入库单号': 'inbound_no',
                 '入库日期': 'inbound_date',
                 '订单编号': 'order_no',

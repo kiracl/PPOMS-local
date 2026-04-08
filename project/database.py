@@ -2471,37 +2471,31 @@ def upsert_inbound_order_batch(records: list):
         update_count = 0
         errors = []
         
+        # 1. Generate a single inbound_no for this batch if there are any "是" records
+        has_new = any(str(r.get('is_new', '')).strip() == '是' for r in records)
+        new_inbound_no = None
+        if has_new:
+            date_yyMMdd = datetime.now().strftime("%y%m%d")
+            new_inbound_no = get_next_inbound_number(date_yyMMdd, "导入")
+        
         for i, rec in enumerate(records):
-            inbound_no = rec.get('inbound_no')
-            if not inbound_no:
-                errors.append(f"第 {i+2} 行: 入库单号不能为空")
+            is_new = str(rec.get('is_new', '')).strip()
+            inbound_no = str(rec.get('inbound_no') or '').strip()
+            
+            if is_new not in ('是', '否'):
+                errors.append(f"第 {i+2} 行: '是否新增'必须填写'是'或'否'")
                 continue
-            
-            # Check if exists
-            cur.execute("SELECT id, contract_order_id FROM inbound_orders WHERE inbound_no=?", (inbound_no,))
-            row = cur.fetchone()
-            
-            if row:
-                # Update
-                cur.execute(
-                    """
-                    UPDATE inbound_orders SET 
-                        inbound_date=?, inbound_qty=?, warehouse_no=?, remarks=?, operator=?
-                    WHERE id=?
-                    """,
-                    (
-                        rec.get('inbound_date'), rec.get('inbound_qty'), 
-                        rec.get('warehouse_no'), rec.get('remarks'), 
-                        rec.get('operator'), row[0]
-                    )
-                )
-                update_count += 1
-                _update_contract_order_status(cur, row[1])
-            else:
-                # Insert - We need contract_order_id to insert correctly.
-                # If it's not provided in the import, we try to find it by order_no and spec_model
-                order_no = rec.get('order_no')
-                spec_model = rec.get('spec_model')
+                
+            if is_new == '是':
+                if inbound_no:
+                    errors.append(f"第 {i+2} 行: '是否新增'为'是'时，'入库单号'必须留空")
+                    continue
+                
+                # Assign the newly generated single inbound_no
+                inbound_no = new_inbound_no
+                
+                order_no = str(rec.get('order_no') or '').strip()
+                spec_model = str(rec.get('spec_model') or '').strip()
                 
                 cur.execute(
                     """
@@ -2539,6 +2533,35 @@ def upsert_inbound_order_batch(records: list):
                 )
                 success_count += 1
                 _update_contract_order_status(cur, contract_order_id)
+                
+            else: # is_new == '否'
+                if not inbound_no:
+                    errors.append(f"第 {i+2} 行: '是否新增'为'否'时，'入库单号'不能为空")
+                    continue
+                
+                # Check if exists
+                cur.execute("SELECT id, contract_order_id FROM inbound_orders WHERE inbound_no=?", (inbound_no,))
+                row = cur.fetchone()
+                
+                if not row:
+                    errors.append(f"第 {i+2} 行: 更新失败，系统中不存在入库单号 '{inbound_no}'")
+                    continue
+                    
+                # Update
+                cur.execute(
+                    """
+                    UPDATE inbound_orders SET 
+                        inbound_date=?, inbound_qty=?, warehouse_no=?, remarks=?, operator=?
+                    WHERE id=?
+                    """,
+                    (
+                        rec.get('inbound_date'), rec.get('inbound_qty'), 
+                        rec.get('warehouse_no'), rec.get('remarks'), 
+                        rec.get('operator'), row[0]
+                    )
+                )
+                update_count += 1
+                _update_contract_order_status(cur, row[1])
         
         conn.commit()
         return success_count, update_count, errors

@@ -687,9 +687,17 @@ class ReconciliationEditor(QWidget):
     def complete_reconciliation(self):
         if not self.current_id: return
         
+        # 校验右侧入库记录是否全部匹配
         for i in range(self.table_inbounds.rowCount()):
             if self.table_inbounds.item(i, 7).text() != "已匹配":
                 QMessageBox.warning(self, "提示", "待对账池中还有未匹配的入库记录，无法完成对账！")
+                return
+                
+        # 校验左侧发票金额是否全部扣减为 0
+        for i in range(self.table_invoices.rowCount()):
+            unmatched_amt = float(self.table_invoices.item(i, 7).text())
+            if unmatched_amt > 0.01:
+                QMessageBox.warning(self, "提示", "待销账发票池中还有未完全匹配的发票金额，无法完成对账！")
                 return
                 
         if QMessageBox.question(self, "确认", "确定要完成对账吗？完成后将进入结算流程。") == QMessageBox.Yes:

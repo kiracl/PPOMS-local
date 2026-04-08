@@ -737,13 +737,14 @@ def _migrate_schema(conn: sqlite3.Connection):
         )
     """
     )
-        cur.execute("PRAGMA table_info(inbound_orders)")
-        cols = [r[1] for r in cur.fetchall()]
-        if "invoice_id" not in cols:
-            cur.execute("ALTER TABLE inbound_orders ADD COLUMN invoice_id INTEGER")
-        if "status" not in cols:
-            cur.execute("ALTER TABLE inbound_orders ADD COLUMN status TEXT DEFAULT '已入库'")
-        conn.commit()
+    # Check for invoice_id and status (migration)
+    cur.execute("PRAGMA table_info(inbound_orders)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "invoice_id" not in cols:
+        cur.execute("ALTER TABLE inbound_orders ADD COLUMN invoice_id INTEGER")
+    if "status" not in cols:
+        cur.execute("ALTER TABLE inbound_orders ADD COLUMN status TEXT DEFAULT '已入库'")
+    conn.commit()
 
     cur.execute(
         """

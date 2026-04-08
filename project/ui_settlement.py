@@ -684,13 +684,26 @@ class ReconciliationEditor(QWidget):
 class InvoiceSelectionDialog(QDialog):
     def __init__(self, supplier, parent=None):
         super().__init__(parent)
+        self.supplier = supplier
         self.setWindowTitle(f"选择发票 - {supplier}")
         self.resize(800, 500)
         
         layout = QVBoxLayout(self)
         
+        # 搜索区域
+        search_layout = QHBoxLayout()
+        self.input_search = QLineEdit(self.supplier)
+        self.input_search.setPlaceholderText("输入发票销售方名称(支持模糊搜索)...")
+        btn_search = QPushButton("搜索")
+        btn_search.clicked.connect(self.load_data)
+        
+        search_layout.addWidget(QLabel("发票销售方:"))
+        search_layout.addWidget(self.input_search)
+        search_layout.addWidget(btn_search)
+        layout.addLayout(search_layout)
+        
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels(["选择", "ID", "发票号", "销售方", "金额", "日期", "状态"])
         self.table.setColumnHidden(1, True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -700,7 +713,16 @@ class InvoiceSelectionDialog(QDialog):
         
         layout.addWidget(self.table)
         
-        data = database.fetch_unlinked_invoices_for_supplier(supplier)
+        self.load_data()
+                
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+    def load_data(self):
+        search_kw = self.input_search.text().strip()
+        data = database.fetch_unlinked_invoices_for_supplier(search_kw)
         
         self.table.setRowCount(0)
         for row in data:
@@ -712,17 +734,13 @@ class InvoiceSelectionDialog(QDialog):
             chk.setCheckState(Qt.Unchecked)
             self.table.setItem(r_idx, 0, chk)
             
-            self.table.setItem(r_idx, 1, QTableWidgetItem(str(row[0])))
-            self.table.setItem(r_idx, 2, QTableWidgetItem(str(row[1])))
-            self.table.setItem(r_idx, 3, QTableWidgetItem(str(row[2]))) # Supplier
+            self.table.setItem(r_idx, 1, QTableWidgetItem(str(row[0]))) # ID
+            self.table.setItem(r_idx, 2, QTableWidgetItem(str(row[1]))) # Invoice Number
+            self.table.setItem(r_idx, 3, QTableWidgetItem(str(row[2]))) # Seller Name
             self.table.setItem(r_idx, 4, QTableWidgetItem(str(row[3]))) # Amount
             self.table.setItem(r_idx, 5, QTableWidgetItem(str(row[4]))) # Date
-                
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        
+            self.table.setItem(r_idx, 6, QTableWidgetItem(str(row[5]))) # Status
+
     def get_selected_ids(self):
         ids = []
         for i in range(self.table.rowCount()):

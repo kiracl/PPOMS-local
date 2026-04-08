@@ -31,9 +31,9 @@ from print import export_order_pdf
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V3.3.0318")
+        self.setWindowTitle("采购管理系统       生产管理部 蔡勒 V3.4.0408")
         
-        # Main Container
+        # Main Containe
         container = QWidget()
         main_layout = QHBoxLayout(container)
         main_layout.setContentsMargins(0, 0, 0, 0)

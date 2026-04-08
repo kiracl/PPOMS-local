@@ -4412,10 +4412,10 @@ def fetch_unlinked_invoices_for_supplier(supplier):
         sql = """
             SELECT id, invoice_number, seller_name, total_amount, date, status
             FROM invoices
-            WHERE seller_name = ? AND status = '新增'
+            WHERE seller_name LIKE ? AND status = '新增'
             AND id NOT IN (SELECT invoice_id FROM recon_invoices)
         """
-        cur.execute(sql, (supplier,))
+        cur.execute(sql, (f"%{supplier}%",))
         return cur.fetchall()
     finally:
         conn.close()

@@ -376,20 +376,37 @@ class ReconciliationEditor(QWidget):
         
         # Form Info
         form_group = QGroupBox("基本信息")
-        form_layout = QHBoxLayout(form_group)
+        # 优化点：使用垂直布局控制高度，并添加拉伸因子防止撑开
+        form_vlayout = QVBoxLayout(form_group)
+        form_vlayout.setContentsMargins(10, 15, 10, 15) # 减小边距
+        
+        form_layout = QHBoxLayout()
         self.input_no = QLineEdit()
         self.input_no.setReadOnly(True)
         self.input_supplier = QLineEdit()
         self.input_supplier.setReadOnly(True)
         self.input_status = QLineEdit()
         self.input_status.setReadOnly(True)
+        # 固定输入框的最大宽度，避免无限拉伸
+        self.input_no.setMaximumWidth(200)
+        self.input_supplier.setMaximumWidth(300)
+        self.input_status.setMaximumWidth(150)
         
         form_layout.addWidget(QLabel("单号:"))
         form_layout.addWidget(self.input_no)
+        form_layout.addSpacing(20) # 增加一点间距
         form_layout.addWidget(QLabel("供应商:"))
         form_layout.addWidget(self.input_supplier)
+        form_layout.addSpacing(20)
         form_layout.addWidget(QLabel("状态:"))
         form_layout.addWidget(self.input_status)
+        form_layout.addStretch() # 将所有元素挤到左边，防止中间出现大片空白
+        
+        form_vlayout.addLayout(form_layout)
+        
+        # 将 GroupBox 的最大高度固定，防止它挤占下方的表格空间
+        form_group.setMaximumHeight(80) 
+        
         self.layout.addWidget(form_group)
         
         # Splitter for Dual Pane

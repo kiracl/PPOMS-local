@@ -4431,6 +4431,34 @@ def link_invoices_to_recon(recon_id, invoice_ids):
     finally:
         conn.close()
 
+def link_inbounds_to_recon(recon_id, inbound_ids):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for ib_id in inbound_ids:
+            cur.execute("INSERT OR IGNORE INTO recon_inbounds(recon_id, inbound_id) VALUES(?,?)", (recon_id, ib_id))
+            cur.execute("UPDATE inbound_orders SET status='对账中' WHERE id=?", (ib_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def remove_inbounds_from_recon(recon_id, inbound_ids):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for ib_id in inbound_ids:
+            # 检查是否已经和发票明细绑定
+            cur.execute("SELECT 1 FROM reconciliation_details WHERE reconciliation_id=? AND inbound_order_id=?", (recon_id, ib_id))
+            if cur.fetchone():
+                return False, f"入库记录ID {ib_id} 已匹配发票，请先解除绑定。"
+            
+            cur.execute("DELETE FROM recon_inbounds WHERE recon_id=? AND inbound_id=?", (recon_id, ib_id))
+            cur.execute("UPDATE inbound_orders SET status='已入库' WHERE id=?", (ib_id,))
+        conn.commit()
+        return True, "成功"
+    finally:
+        conn.close()
+
 def fetch_recon_invoice_items(recon_id):
     conn = _connect()
     try:

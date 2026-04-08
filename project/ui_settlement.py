@@ -460,7 +460,19 @@ class ReconciliationEditor(QWidget):
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(QLabel("<b>待对账入库池 (右)</b>"))
+        
+        right_header = QHBoxLayout()
+        right_header.addWidget(QLabel("<b>待对账入库池 (右)</b>"))
+        right_header.addStretch()
+        
+        self.btn_add_inbound = QPushButton("关联入库记录")
+        self.btn_add_inbound.clicked.connect(self.add_inbound)
+        self.btn_remove_inbound = QPushButton("移除入库记录")
+        self.btn_remove_inbound.clicked.connect(self.remove_inbound)
+        
+        right_header.addWidget(self.btn_add_inbound)
+        right_header.addWidget(self.btn_remove_inbound)
+        right_layout.addLayout(right_header)
         
         self.table_inbounds = QTableWidget()
         self.table_inbounds.setColumnCount(8)
@@ -497,6 +509,8 @@ class ReconciliationEditor(QWidget):
         self.btn_complete.setVisible(is_edit)
         self.btn_add_invoice.setVisible(is_edit)
         self.btn_remove_invoice.setVisible(is_edit)
+        self.btn_add_inbound.setVisible(is_edit)
+        self.btn_remove_inbound.setVisible(is_edit)
         self.btn_auto_match.setVisible(is_edit)
         self.btn_manual_match.setVisible(is_edit)
         self.btn_unbind.setVisible(is_edit)
@@ -574,6 +588,32 @@ class ReconciliationEditor(QWidget):
                 
     def remove_invoice(self):
         QMessageBox.warning(self, "提示", "请在发票管理模块或直接通过解除绑定处理（暂未实现按明细移除整张发票）")
+        
+    def add_inbound(self):
+        supplier = self.input_supplier.text()
+        dlg = InboundSelectionDialog(supplier, self)
+        if dlg.exec():
+            ids = dlg.get_selected_ids()
+            if ids:
+                database.link_inbounds_to_recon(self.current_id, ids)
+                self.refresh_tables()
+                
+    def remove_inbound(self):
+        selected_ibs = []
+        for i in range(self.table_inbounds.rowCount()):
+            if self.table_inbounds.item(i, 0).checkState() == Qt.Checked:
+                selected_ibs.append(int(self.table_inbounds.item(i, 1).text()))
+                
+        if not selected_ibs:
+            QMessageBox.warning(self, "提示", "请在下方勾选要移除的入库记录")
+            return
+            
+        success, msg = database.remove_inbounds_from_recon(self.current_id, selected_ibs)
+        if not success:
+            QMessageBox.warning(self, "警告", msg)
+        else:
+            QMessageBox.information(self, "成功", "移除成功！")
+            self.refresh_tables()
         
     def auto_match(self):
         QMessageBox.information(self, "提示", "自动匹配触发：寻找金额与数量一致的明细进行连线。")
@@ -740,6 +780,63 @@ class InvoiceSelectionDialog(QDialog):
             self.table.setItem(r_idx, 4, QTableWidgetItem(str(row[3]))) # Amount
             self.table.setItem(r_idx, 5, QTableWidgetItem(str(row[4]))) # Date
             self.table.setItem(r_idx, 6, QTableWidgetItem(str(row[5]))) # Status
+
+    def get_selected_ids(self):
+        ids = []
+        for i in range(self.table.rowCount()):
+            if self.table.item(i, 0).checkState() == Qt.Checked:
+                ids.append(int(self.table.item(i, 1).text()))
+        return ids
+
+class InboundSelectionDialog(QDialog):
+    def __init__(self, supplier, parent=None):
+        super().__init__(parent)
+        self.supplier = supplier
+        self.setWindowTitle(f"选择入库记录 - {supplier}")
+        self.resize(900, 500)
+        
+        layout = QVBoxLayout(self)
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels(["选择", "ID", "入库单号", "入库日期", "合同号", "订单号", "规格型号", "数量", "单价"])
+        self.table.setColumnHidden(1, True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        
+        layout.addWidget(self.table)
+        
+        self.load_data()
+                
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+    def load_data(self):
+        data = database.fetch_inbounds_by_supplier(self.supplier)
+        
+        self.table.setRowCount(0)
+        for row in data:
+            r_idx = self.table.rowCount()
+            self.table.insertRow(r_idx)
+            
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            chk.setCheckState(Qt.Unchecked)
+            self.table.setItem(r_idx, 0, chk)
+            
+            # id, no, date, contract, order, spec, qty, price, name
+            self.table.setItem(r_idx, 1, QTableWidgetItem(str(row[0]))) # ID
+            self.table.setItem(r_idx, 2, QTableWidgetItem(str(row[1]))) # No
+            self.table.setItem(r_idx, 3, QTableWidgetItem(str(row[2]))) # Date
+            self.table.setItem(r_idx, 4, QTableWidgetItem(str(row[3]))) # Contract
+            self.table.setItem(r_idx, 5, QTableWidgetItem(str(row[4]))) # Order
+            self.table.setItem(r_idx, 6, QTableWidgetItem(str(row[5]))) # Spec
+            self.table.setItem(r_idx, 7, QTableWidgetItem(str(row[6]))) # Qty
+            self.table.setItem(r_idx, 8, QTableWidgetItem(str(row[7]))) # Price
 
     def get_selected_ids(self):
         ids = []

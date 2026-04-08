@@ -4438,8 +4438,8 @@ def fetch_recon_invoice_items(recon_id):
         sql = """
             SELECT 
                 ii.id, i.invoice_number, ii.item_name, ii.spec_model, 
-                ii.quantity, ii.unit_price, ii.amount, ii.tax_amount,
-                (SELECT COALESCE(SUM(amount_excl_tax), 0) FROM reconciliation_details rd WHERE rd.invoice_item_id = ii.id AND rd.reconciliation_id = ?) as matched_amount
+                ii.quantity, ii.unit_price, (ii.amount + COALESCE(ii.tax_amount, 0)) as amount_incl_tax, ii.tax_amount,
+                (SELECT COALESCE(SUM(amount_incl_tax), 0) FROM reconciliation_details rd WHERE rd.invoice_item_id = ii.id AND rd.reconciliation_id = ?) as matched_amount
             FROM invoice_items ii
             JOIN recon_invoices ri ON ii.invoice_id = ri.invoice_id
             JOIN invoices i ON ii.invoice_id = i.id
@@ -4488,8 +4488,9 @@ def bind_recon_items(recon_id, invoice_item_id, inbound_ids):
             row = cur.fetchone()
             if not row: continue
             qty, price, tax_rate = row
-            amt_excl = qty * price
-            amt_incl = amt_excl * (1 + (tax_rate or 0)/100.0)
+            # Since the price in PPOMS is already tax-inclusive, we set amt_incl directly.
+            amt_incl = qty * price
+            amt_excl = amt_incl / (1 + (tax_rate or 13)/100.0) # Approximated excl tax
             
             cur.execute("""
                 INSERT INTO reconciliation_details(

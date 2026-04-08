@@ -430,7 +430,7 @@ class ReconciliationEditor(QWidget):
         
         self.table_invoices = QTableWidget()
         self.table_invoices.setColumnCount(8)
-        self.table_invoices.setHorizontalHeaderLabels(["ID", "发票号", "品名", "规格", "数量", "单价", "金额(未税)", "未匹配金额"])
+        self.table_invoices.setHorizontalHeaderLabels(["ID", "发票号", "品名", "规格", "数量", "单价", "金额(含税)", "未匹配金额"])
         self.table_invoices.setColumnHidden(0, True)
         self.table_invoices.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_invoices.setSelectionMode(QAbstractItemView.SingleSelection)

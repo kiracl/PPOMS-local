@@ -87,8 +87,8 @@ class PlanSearchWidget(QWidget):
         
         # 3. Data Table
         self.table = QTableWidget()
-        self.columns = ["序号", "主单编号", "需求单位", "采购标的", "规格型号", "采购数量", "单位", "计划发放日期"]
-        self.db_fields = ["sequence_no", "main_order_no", "demand_unit", "item_name", "spec_model", "qty", "unit", "plan_date"]
+        self.columns = ["序号", "主单编号", "需求单位", "采购标的", "规格型号", "采购数量", "单位", "计划发放日期", "计划发放"]
+        self.db_fields = ["sequence_no", "main_order_no", "demand_unit", "item_name", "spec_model", "qty", "unit", "plan_date", "plan_release"]
         
         self.table.setColumnCount(len(self.columns))
         self.table.setHorizontalHeaderLabels(self.columns)
@@ -219,7 +219,7 @@ class PlanSearchWidget(QWidget):
             
             # Assuming header is row 1
             headers = [cell.value for cell in sheet[1]]
-            required_headers = ["序号", "主单编号", "需求单位", "采购标的", "规格型号", "采购数量", "单位", "计划发放日期"]
+            required_headers = ["序号", "主单编号", "需求单位", "采购标的", "规格型号", "采购数量", "单位", "计划发放日期", "计划发放"]
             
             # Map headers to col index
             col_map = {}
@@ -230,8 +230,12 @@ class PlanSearchWidget(QWidget):
             # Check missing
             missing = [h for h in required_headers if h not in col_map]
             if missing:
-                QMessageBox.warning(self, "导入失败", f"缺少列: {', '.join(missing)}")
-                return
+                # If only plan_release is missing, it might be an old template, we can tolerate it or warn
+                if missing == ["计划发放"]:
+                    pass
+                else:
+                    QMessageBox.warning(self, "导入失败", f"缺少列: {', '.join(missing)}")
+                    return
                 
             data_list = []
             for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
@@ -248,7 +252,8 @@ class PlanSearchWidget(QWidget):
                     "spec_model": str(row[col_map["规格型号"]] or "").strip(),
                     "qty": row[col_map["采购数量"]],
                     "unit": str(row[col_map["单位"]] or "").strip(),
-                    "plan_date": str(row[col_map["计划发放日期"]] or "").strip()
+                    "plan_date": str(row[col_map["计划发放日期"]] or "").strip(),
+                    "plan_release": str(row[col_map.get("计划发放")] and row[col_map["计划发放"]] or "").strip() if "计划发放" in col_map else ""
                 }
                 
                 # Basic validation logic could go here

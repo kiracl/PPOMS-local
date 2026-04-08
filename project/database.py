@@ -223,10 +223,18 @@ def _init_schema(conn: sqlite3.Connection):
             spec_model TEXT,
             qty REAL,
             unit TEXT,
-            plan_date TEXT
+            plan_date TEXT,
+            plan_release TEXT
         )
         """
     )
+    conn.commit()
+
+    # Check if plan_release exists in plan_search_items
+    cur.execute("PRAGMA table_info(plan_search_items)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "plan_release" not in cols:
+        cur.execute("ALTER TABLE plan_search_items ADD COLUMN plan_release TEXT")
     conn.commit()
 
     # --- NEW TABLE: historical_quotes ---
@@ -941,10 +949,18 @@ def _migrate_schema(conn: sqlite3.Connection):
             spec_model TEXT,
             qty REAL,
             unit TEXT,
-            plan_date TEXT
+            plan_date TEXT,
+            plan_release TEXT
         )
         """
     )
+    conn.commit()
+
+    # Check if plan_release exists in plan_search_items
+    cur.execute("PRAGMA table_info(plan_search_items)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "plan_release" not in cols:
+        cur.execute("ALTER TABLE plan_search_items ADD COLUMN plan_release TEXT")
     conn.commit()
 
     # --- NEW TABLE MIGRATION: historical_quotes ---
@@ -1393,7 +1409,8 @@ def sync_plan_search_items_from_orders():
                 od.spec_model, 
                 od.purchase_qty, 
                 od.unit as unit, 
-                o.date as plan_date
+                o.date as plan_date,
+                od.plan_release
             FROM order_details od
             JOIN orders o ON od.order_number = o.number
             WHERE od.detail_no IS NOT NULL AND od.detail_no != ''
@@ -1404,7 +1421,7 @@ def sync_plan_search_items_from_orders():
         
         count = 0
         for row in rows:
-            # row: detail_no, order_number, demand_unit, purchase_item, spec_model, purchase_qty, unit, plan_date
+            # row: detail_no, order_number, demand_unit, purchase_item, spec_model, purchase_qty, unit, plan_date, plan_release
             seq = row[0]
             
             # Check if exists
@@ -1417,10 +1434,10 @@ def sync_plan_search_items_from_orders():
                     """
                     UPDATE plan_search_items SET 
                         main_order_no=?, demand_unit=?, item_name=?, spec_model=?, 
-                        qty=?, unit=?, plan_date=?
+                        qty=?, unit=?, plan_date=?, plan_release=?
                     WHERE sequence_no=?
                     """,
-                    (row[1], row[2], row[3], row[4], row[5], row[6], row[7], seq)
+                    (row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], seq)
                 )
             else:
                 # Insert
@@ -1428,10 +1445,10 @@ def sync_plan_search_items_from_orders():
                     """
                     INSERT INTO plan_search_items(
                         sequence_no, main_order_no, demand_unit, item_name, spec_model, 
-                        qty, unit, plan_date
-                    ) VALUES(?,?,?,?,?,?,?,?)
+                        qty, unit, plan_date, plan_release
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
                     """,
-                    (seq, row[1], row[2], row[3], row[4], row[5], row[6], row[7])
+                    (seq, row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8])
                 )
             count += 1
             
@@ -3675,7 +3692,7 @@ def fetch_plan_search_items(filter_seq=None, filter_item=None, filter_order=None
         sql = """
             SELECT 
                 sequence_no, main_order_no, demand_unit, item_name, spec_model, 
-                qty, unit, plan_date
+                qty, unit, plan_date, plan_release
             FROM plan_search_items
             WHERE 1=1
         """
@@ -3754,13 +3771,13 @@ def import_plan_search_items(data_list):
                     """
                     UPDATE plan_search_items SET 
                         main_order_no=?, demand_unit=?, item_name=?, spec_model=?, 
-                        qty=?, unit=?, plan_date=?
+                        qty=?, unit=?, plan_date=?, plan_release=?
                     WHERE sequence_no=?
                     """,
                     (
                         item.get('main_order_no'), item.get('demand_unit'), item.get('item_name'), 
                         item.get('spec_model'), item.get('qty'), item.get('unit'), 
-                        item.get('plan_date'), seq
+                        item.get('plan_date'), item.get('plan_release'), seq
                     )
                 )
                 updated += 1
@@ -3770,13 +3787,13 @@ def import_plan_search_items(data_list):
                     """
                     INSERT INTO plan_search_items(
                         sequence_no, main_order_no, demand_unit, item_name, spec_model, 
-                        qty, unit, plan_date
-                    ) VALUES(?,?,?,?,?,?,?,?)
+                        qty, unit, plan_date, plan_release
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         seq, item.get('main_order_no'), item.get('demand_unit'), 
                         item.get('item_name'), item.get('spec_model'), item.get('qty'), 
-                        item.get('unit'), item.get('plan_date')
+                        item.get('unit'), item.get('plan_date'), item.get('plan_release')
                     )
                 )
                 inserted += 1
@@ -3806,7 +3823,7 @@ def get_all_plan_search_items_for_export(filter_seq=None, filter_item=None, filt
         sql = """
             SELECT 
                 sequence_no, main_order_no, demand_unit, item_name, spec_model, 
-                qty, unit, plan_date
+                qty, unit, plan_date, plan_release
             FROM plan_search_items
             WHERE 1=1
         """

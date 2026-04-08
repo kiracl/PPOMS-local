@@ -1386,6 +1386,148 @@ class ContractOrderWidget(QWidget):
             self.table.setItem(row, 12, QTableWidgetItem(str(row_data[12])))
 
 
+class SupplierManagerWidget(QWidget):
+    suppliers_changed = Signal()
+    
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        
+        # Form area
+        form_group = QGroupBox("新增/编辑供应商")
+        form_layout = QGridLayout()
+        
+        self.input_name = QLineEdit()
+        self.input_name.setPlaceholderText("供应商简称 (必填)")
+        self.input_full_name = QLineEdit()
+        self.input_full_name.setPlaceholderText("供应商全称")
+        self.input_bank_name = QLineEdit()
+        self.input_bank_name.setPlaceholderText("开户行")
+        self.input_bank_account = QLineEdit()
+        self.input_bank_account.setPlaceholderText("账号")
+        self.input_contact_person = QLineEdit()
+        self.input_contact_person.setPlaceholderText("联系人")
+        self.input_contact_phone = QLineEdit()
+        self.input_contact_phone.setPlaceholderText("联系电话")
+        self.input_remarks = QLineEdit()
+        self.input_remarks.setPlaceholderText("备注")
+        
+        form_layout.addWidget(QLabel("简称:"), 0, 0)
+        form_layout.addWidget(self.input_name, 0, 1)
+        form_layout.addWidget(QLabel("全称:"), 0, 2)
+        form_layout.addWidget(self.input_full_name, 0, 3)
+        form_layout.addWidget(QLabel("开户行:"), 1, 0)
+        form_layout.addWidget(self.input_bank_name, 1, 1)
+        form_layout.addWidget(QLabel("账号:"), 1, 2)
+        form_layout.addWidget(self.input_bank_account, 1, 3)
+        form_layout.addWidget(QLabel("联系人:"), 2, 0)
+        form_layout.addWidget(self.input_contact_person, 2, 1)
+        form_layout.addWidget(QLabel("联系电话:"), 2, 2)
+        form_layout.addWidget(self.input_contact_phone, 2, 3)
+        form_layout.addWidget(QLabel("备注:"), 3, 0)
+        form_layout.addWidget(self.input_remarks, 3, 1, 1, 3)
+        
+        btn_layout = QHBoxLayout()
+        self.btn_save = QPushButton("保存/更新")
+        self.btn_save.clicked.connect(self.save_data)
+        self.btn_clear = QPushButton("清空/新增")
+        self.btn_clear.clicked.connect(self.clear_form)
+        self.btn_delete = QPushButton("删除")
+        self.btn_delete.clicked.connect(self.delete_data)
+        
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_delete)
+        btn_layout.addWidget(self.btn_clear)
+        btn_layout.addWidget(self.btn_save)
+        
+        form_vlayout = QVBoxLayout()
+        form_vlayout.addLayout(form_layout)
+        form_vlayout.addLayout(btn_layout)
+        form_group.setLayout(form_vlayout)
+        
+        layout.addWidget(form_group)
+        
+        # Table area
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["简称", "全称", "开户行", "账号", "联系人", "联系电话", "备注"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.itemClicked.connect(self.on_table_clicked)
+        
+        layout.addWidget(self.table)
+        
+        self.load_data()
+        
+    def load_data(self):
+        data = database.fetch_suppliers_details()
+        self.table.setRowCount(0)
+        for r in data:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            for col, val in enumerate(r):
+                self.table.setItem(row, col, QTableWidgetItem(str(val) if val else ""))
+                
+    def save_data(self):
+        name = self.input_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "供应商简称不能为空！")
+            return
+            
+        data = {
+            'name': name,
+            'full_name': self.input_full_name.text().strip(),
+            'bank_name': self.input_bank_name.text().strip(),
+            'bank_account': self.input_bank_account.text().strip(),
+            'contact_person': self.input_contact_person.text().strip(),
+            'contact_phone': self.input_contact_phone.text().strip(),
+            'remarks': self.input_remarks.text().strip(),
+        }
+        if database.upsert_supplier(data):
+            QMessageBox.information(self, "成功", "保存成功！")
+            self.load_data()
+            self.clear_form()
+            self.suppliers_changed.emit()
+        else:
+            QMessageBox.warning(self, "失败", "保存失败，可能是数据异常。")
+            
+    def delete_data(self):
+        name = self.input_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "请选择要删除的供应商！")
+            return
+        if QMessageBox.question(self, "确认", f"确定要删除供应商 '{name}' 吗？") == QMessageBox.Yes:
+            if database.delete_supplier(name):
+                QMessageBox.information(self, "成功", "删除成功！")
+                self.load_data()
+                self.clear_form()
+                self.suppliers_changed.emit()
+            else:
+                QMessageBox.warning(self, "失败", "删除失败。")
+
+    def clear_form(self):
+        self.input_name.clear()
+        self.input_full_name.clear()
+        self.input_bank_name.clear()
+        self.input_bank_account.clear()
+        self.input_contact_person.clear()
+        self.input_contact_phone.clear()
+        self.input_remarks.clear()
+        self.input_name.setReadOnly(False)
+        
+    def on_table_clicked(self, item):
+        row = item.row()
+        self.input_name.setText(self.table.item(row, 0).text())
+        self.input_full_name.setText(self.table.item(row, 1).text())
+        self.input_bank_name.setText(self.table.item(row, 2).text())
+        self.input_bank_account.setText(self.table.item(row, 3).text())
+        self.input_contact_person.setText(self.table.item(row, 4).text())
+        self.input_contact_phone.setText(self.table.item(row, 5).text())
+        self.input_remarks.setText(self.table.item(row, 6).text())
+        self.input_name.setReadOnly(True) # Update mode, name is primary key
+
 class ContractManagerWidget(QWidget):
     def __init__(self):
         super().__init__()
@@ -1417,12 +1559,19 @@ class ContractManagerWidget(QWidget):
         self.report_widget = ContractReportWidget()
         self.tabs.addTab(self.report_widget, "报表分析")
         
+        # Tab 3: Supplier Management
+        self.supplier_widget = SupplierManagerWidget()
+        self.supplier_widget.suppliers_changed.connect(self.refresh_suppliers)
+        self.tabs.addTab(self.supplier_widget, "供应商管理")
+        
         # Connect tab change to refresh report
         self.tabs.currentChanged.connect(self.on_tab_changed)
         
     def on_tab_changed(self, index):
         if self.tabs.widget(index) == self.report_widget:
             self.report_widget.load_data()
+        elif hasattr(self, 'supplier_widget') and self.tabs.widget(index) == self.supplier_widget:
+            self.supplier_widget.load_data()
         
     def open_order_view(self, contract_id, contract_no, contract_name):
         if self.order_widget:
@@ -1447,6 +1596,8 @@ class ContractManagerWidget(QWidget):
         
     def refresh_suppliers(self):
         self.list_widget.refresh_suppliers()
+        if hasattr(self, 'report_widget'):
+            self.report_widget.refresh_suppliers()
 
     def refresh_categories(self):
         self.list_widget.refresh_categories()

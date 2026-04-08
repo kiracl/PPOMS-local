@@ -859,6 +859,23 @@ def _migrate_schema(conn: sqlite3.Connection):
     if cur.fetchone()[0] == 0:
         cur.executemany("INSERT INTO contract_categories(name) VALUES(?)", [("模块",), ("脚线",), ("其它",)])
         conn.commit()
+        
+    # Check suppliers columns for new supplier management
+    cur.execute("PRAGMA table_info(suppliers)")
+    supplier_cols = [r[1] for r in cur.fetchall()]
+    if "full_name" not in supplier_cols:
+        cur.execute("ALTER TABLE suppliers ADD COLUMN full_name TEXT")
+    if "bank_name" not in supplier_cols:
+        cur.execute("ALTER TABLE suppliers ADD COLUMN bank_name TEXT")
+    if "bank_account" not in supplier_cols:
+        cur.execute("ALTER TABLE suppliers ADD COLUMN bank_account TEXT")
+    if "contact_person" not in supplier_cols:
+        cur.execute("ALTER TABLE suppliers ADD COLUMN contact_person TEXT")
+    if "contact_phone" not in supplier_cols:
+        cur.execute("ALTER TABLE suppliers ADD COLUMN contact_phone TEXT")
+    if "remarks" not in supplier_cols:
+        cur.execute("ALTER TABLE suppliers ADD COLUMN remarks TEXT")
+    conn.commit()
     
     cur.execute(
         """
@@ -2665,13 +2682,46 @@ def fetch_suppliers():
     finally:
         conn.close()
 
-def add_supplier(name: str) -> bool:
-    name = name.strip()
+def fetch_suppliers_details():
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name, full_name, bank_name, bank_account, contact_person, contact_phone, remarks FROM suppliers ORDER BY name")
+        return cur.fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+def upsert_supplier(data: dict) -> bool:
+    name = data.get('name', '').strip()
     if not name: return False
     conn = _connect()
     try:
         cur = conn.cursor()
-        cur.execute("INSERT INTO suppliers(name) VALUES(?)", (name,))
+        cur.execute("SELECT 1 FROM suppliers WHERE name=?", (name,))
+        exists = cur.fetchone()
+        
+        full_name = data.get('full_name', '').strip()
+        bank_name = data.get('bank_name', '').strip()
+        bank_account = data.get('bank_account', '').strip()
+        contact_person = data.get('contact_person', '').strip()
+        contact_phone = data.get('contact_phone', '').strip()
+        remarks = data.get('remarks', '').strip()
+        
+        if exists:
+            cur.execute("""
+                UPDATE suppliers SET 
+                    full_name=?, bank_name=?, bank_account=?, 
+                    contact_person=?, contact_phone=?, remarks=?
+                WHERE name=?
+            """, (full_name, bank_name, bank_account, contact_person, contact_phone, remarks, name))
+        else:
+            cur.execute("""
+                INSERT INTO suppliers(name, full_name, bank_name, bank_account, contact_person, contact_phone, remarks)
+                VALUES(?,?,?,?,?,?,?)
+            """, (name, full_name, bank_name, bank_account, contact_person, contact_phone, remarks))
+            
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -4602,11 +4652,30 @@ def save_reconciliation(data: dict):
             new_inbound_status = '已结算'
             
         if new_inbound_status:
+            # 1. 更新所有参与了对账明细的入库单状态
             cur.execute("SELECT inbound_order_id FROM reconciliation_details WHERE reconciliation_id=?", (rec_id,))
             inbound_ids = [r[0] for r in cur.fetchall() if r[0]]
             if inbound_ids:
                 placeholders = ",".join(["?"] * len(inbound_ids))
                 cur.execute(f"UPDATE inbound_orders SET status=? WHERE id IN ({placeholders})", [new_inbound_status] + inbound_ids)
+                
+            # 2. 更新该对账单绑定的所有发票的状态
+            new_invoice_status = None
+            if status == '待对账':
+                new_invoice_status = '对账中'
+            elif status == '已对账':
+                new_invoice_status = '已对账'
+            elif status == '结算中':
+                new_invoice_status = '结算中'
+            elif status == '已结算':
+                new_invoice_status = '已结算'
+                
+            if new_invoice_status:
+                cur.execute("SELECT invoice_id FROM recon_invoices WHERE recon_id=?", (rec_id,))
+                invoice_ids = [r[0] for r in cur.fetchall() if r[0]]
+                if invoice_ids:
+                    placeholders = ",".join(["?"] * len(invoice_ids))
+                    cur.execute(f"UPDATE invoices SET status=? WHERE id IN ({placeholders})", [new_invoice_status] + invoice_ids)
                 
         conn.commit()
         return rec_id

@@ -138,6 +138,13 @@ class ContractReportWidget(QWidget):
         if lbl:
             lbl.setText(value)
 
+    def refresh_suppliers(self):
+        current_sup = self.combo_supplier.currentText()
+        self.combo_supplier.clear()
+        self.combo_supplier.addItem("全部供应商")
+        self.combo_supplier.addItems(database.fetch_suppliers())
+        self.combo_supplier.setCurrentText(current_sup)
+        
     def load_data(self):
         year = self.combo_year.currentText()
         year = year if year != "全部年份" else None

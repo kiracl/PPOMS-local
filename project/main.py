@@ -178,8 +178,6 @@ class MainWindow(QMainWindow):
         act_months.triggered.connect(self.open_month_settings)
         act_contract_cats = menu.addAction("合同类别")
         act_contract_cats.triggered.connect(self.open_contract_category_settings)
-        act_suppliers = menu.addAction("供应商")
-        act_suppliers.triggered.connect(self.open_supplier_settings)
         
         tools = self.menuBar().addMenu("工具")
         act_validate = tools.addAction("校验明细序号")
@@ -475,13 +473,6 @@ class MainWindow(QMainWindow):
         dlg.exec()
         if hasattr(self, 'contract_manager'):
             self.contract_manager.refresh_categories()
-
-    def open_supplier_settings(self):
-        dlg = SettingsDialog(database.fetch_suppliers, database.add_supplier, database.rename_supplier, database.delete_supplier)
-        dlg.setWindowTitle("设置 - 供应商")
-        dlg.exec()
-        if hasattr(self, 'contract_manager'):
-            self.contract_manager.refresh_suppliers()
 
     def show_context_menu(self, pos):
         item = self.form.table.itemAt(pos)

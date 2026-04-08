@@ -134,6 +134,24 @@ def _init_schema(conn: sqlite3.Connection):
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recon_invoices (
+            recon_id INTEGER,
+            invoice_id INTEGER,
+            PRIMARY KEY (recon_id, invoice_id)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recon_inbounds (
+            recon_id INTEGER,
+            inbound_id INTEGER,
+            PRIMARY KEY (recon_id, inbound_id)
+        )
+        """
+    )
     conn.commit()
     cur.execute(
         """
@@ -4327,6 +4345,171 @@ def update_invoice_material_no(invoice_id: int, mat_no: str):
     finally:
         conn.close()
 
+def fetch_inbounds_by_supplier(supplier, status='已入库'):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                io.id, io.inbound_no, io.inbound_date, io.contract_no, io.order_no, 
+                io.spec_model, io.inbound_qty, co.unit_price,
+                '' as item_name
+            FROM inbound_orders io
+            JOIN contract_orders co ON io.contract_order_id = co.id
+            JOIN contracts c ON co.contract_id = c.id
+            WHERE c.supplier = ? AND io.status = ?
+        """
+        cur.execute(sql, (supplier, status))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_suppliers_with_inbounds(status='已入库'):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT DISTINCT c.supplier
+            FROM inbound_orders io
+            JOIN contract_orders co ON io.contract_order_id = co.id
+            JOIN contracts c ON co.contract_id = c.id
+            WHERE io.status = ? AND c.supplier IS NOT NULL
+        """
+        cur.execute(sql, (status,))
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+def create_reconciliation_with_inbounds(supplier, inbound_ids):
+    recon_no = get_next_reconciliation_number()
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO reconciliations(reconciliation_no, supplier, status, total_amount, created_at, remarks)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (recon_no, supplier, '待对账', 0.0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), '')
+        )
+        recon_id = cur.lastrowid
+        
+        if inbound_ids:
+            placeholders = ",".join(["?"] * len(inbound_ids))
+            cur.execute(f"UPDATE inbound_orders SET status='对账中' WHERE id IN ({placeholders})", inbound_ids)
+            for ib_id in inbound_ids:
+                cur.execute("INSERT INTO recon_inbounds(recon_id, inbound_id) VALUES(?,?)", (recon_id, ib_id))
+                
+        conn.commit()
+        return recon_id
+    finally:
+        conn.close()
+
+def fetch_unlinked_invoices_for_supplier(supplier):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT id, invoice_number, total_amount, date, status
+            FROM invoices
+            WHERE seller_name = ? AND status = '新增'
+            AND id NOT IN (SELECT invoice_id FROM recon_invoices)
+        """
+        cur.execute(sql, (supplier,))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def link_invoices_to_recon(recon_id, invoice_ids):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for inv_id in invoice_ids:
+            cur.execute("INSERT OR IGNORE INTO recon_invoices(recon_id, invoice_id) VALUES(?,?)", (recon_id, inv_id))
+            cur.execute("UPDATE invoices SET status='对账中' WHERE id=?", (inv_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def fetch_recon_invoice_items(recon_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                ii.id, i.invoice_number, ii.item_name, ii.spec_model, 
+                ii.quantity, ii.unit_price, ii.amount, ii.tax_amount,
+                (SELECT COALESCE(SUM(amount_excl_tax), 0) FROM reconciliation_details rd WHERE rd.invoice_item_id = ii.id AND rd.reconciliation_id = ?) as matched_amount
+            FROM invoice_items ii
+            JOIN recon_invoices ri ON ii.invoice_id = ri.invoice_id
+            JOIN invoices i ON ii.invoice_id = i.id
+            WHERE ri.recon_id = ?
+        """
+        cur.execute(sql, (recon_id, recon_id))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_recon_inbounds(recon_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT 
+                io.id, io.inbound_no, '' as item_name, io.spec_model, 
+                io.inbound_qty, co.unit_price, 
+                (io.inbound_qty * co.unit_price) as total_amount,
+                (SELECT COUNT(*) FROM reconciliation_details rd WHERE rd.inbound_order_id = io.id AND rd.reconciliation_id = ?) as is_matched
+            FROM inbound_orders io
+            JOIN recon_inbounds rb ON io.id = rb.inbound_id
+            JOIN contract_orders co ON io.contract_order_id = co.id
+            WHERE rb.recon_id = ?
+        """
+        cur.execute(sql, (recon_id, recon_id))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+def bind_recon_items(recon_id, invoice_item_id, inbound_ids):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for ib_id in inbound_ids:
+            cur.execute("SELECT 1 FROM reconciliation_details WHERE inbound_order_id=? AND reconciliation_id=?", (ib_id, recon_id))
+            if cur.fetchone():
+                continue
+            
+            cur.execute("""
+                SELECT io.inbound_qty, co.unit_price, 0 as tax_rate
+                FROM inbound_orders io
+                JOIN contract_orders co ON io.contract_order_id = co.id
+                WHERE io.id=?
+            """, (ib_id,))
+            row = cur.fetchone()
+            if not row: continue
+            qty, price, tax_rate = row
+            amt_excl = qty * price
+            amt_incl = amt_excl * (1 + (tax_rate or 0)/100.0)
+            
+            cur.execute("""
+                INSERT INTO reconciliation_details(
+                    reconciliation_id, invoice_item_id, inbound_order_id, 
+                    quantity, amount_excl_tax, amount_incl_tax
+                ) VALUES(?,?,?,?,?,?)
+            """, (recon_id, invoice_item_id, ib_id, qty, amt_excl, amt_incl))
+        conn.commit()
+    finally:
+        conn.close()
+
+def unbind_recon_inbound(recon_id, inbound_id):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM reconciliation_details WHERE reconciliation_id=? AND inbound_order_id=?", (recon_id, inbound_id))
+        conn.commit()
+    finally:
+        conn.close()
+
 def fetch_reconciliations(filter_text=None, status_filter=None):
     conn = _connect()
     try:
@@ -4412,6 +4595,15 @@ def delete_reconciliation(rec_id: int):
             placeholders = ",".join(["?"] * len(inbound_ids))
             cur.execute(f"UPDATE inbound_orders SET status='已入库' WHERE id IN ({placeholders})", inbound_ids)
             
+        cur.execute("SELECT invoice_id FROM recon_invoices WHERE recon_id=?", (rec_id,))
+        invoice_ids = [r[0] for r in cur.fetchall() if r[0]]
+        if invoice_ids:
+            placeholders = ",".join(["?"] * len(invoice_ids))
+            cur.execute(f"UPDATE invoices SET status='新增' WHERE id IN ({placeholders})", invoice_ids)
+
+        cur.execute("DELETE FROM recon_inbounds WHERE recon_id=?", (rec_id,))
+        cur.execute("DELETE FROM recon_invoices WHERE recon_id=?", (rec_id,))
+        
         cur.execute("DELETE FROM reconciliation_details WHERE reconciliation_id=?", (rec_id,))
         cur.execute("DELETE FROM reconciliations WHERE id=?", (rec_id,))
         conn.commit()
@@ -4438,6 +4630,9 @@ def delete_reconciliation_invoice(rec_id: int, invoice_id: int):
             # Delete details
             cur.execute(f"DELETE FROM reconciliation_details WHERE reconciliation_id=? AND invoice_item_id IN ({placeholders})", [rec_id] + item_ids)
             
+        cur.execute("DELETE FROM recon_invoices WHERE recon_id=? AND invoice_id=?", (rec_id, invoice_id))
+        cur.execute("UPDATE invoices SET status='新增' WHERE id=?", (invoice_id,))
+        
         conn.commit()
     finally:
         conn.close()

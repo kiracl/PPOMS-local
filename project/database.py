@@ -4353,7 +4353,7 @@ def fetch_inbounds_by_supplier(supplier, status='已入库'):
             SELECT 
                 io.id, io.inbound_no, io.inbound_date, io.contract_no, io.order_no, 
                 io.spec_model, io.inbound_qty, co.unit_price,
-                '' as item_name
+                c.category as item_name
             FROM inbound_orders io
             JOIN contract_orders co ON io.contract_order_id = co.id
             JOIN contracts c ON co.contract_id = c.id
@@ -4484,13 +4484,14 @@ def fetch_recon_inbounds(recon_id):
         cur = conn.cursor()
         sql = """
             SELECT 
-                io.id, io.inbound_no, '' as item_name, io.spec_model, 
+                io.id, io.inbound_no, c.category as item_name, io.spec_model, 
                 io.inbound_qty, co.unit_price, 
                 (io.inbound_qty * co.unit_price) as total_amount,
                 (SELECT COUNT(*) FROM reconciliation_details rd WHERE rd.inbound_order_id = io.id AND rd.reconciliation_id = ?) as is_matched
             FROM inbound_orders io
             JOIN recon_inbounds rb ON io.id = rb.inbound_id
             JOIN contract_orders co ON io.contract_order_id = co.id
+            JOIN contracts c ON co.contract_id = c.id
             WHERE rb.recon_id = ?
         """
         cur.execute(sql, (recon_id, recon_id))

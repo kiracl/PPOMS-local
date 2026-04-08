@@ -642,4 +642,4 @@ class InvoiceManagerWidget(QWidget):
                 database.delete_invoice(invoice_id)
                 self.load_data()
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"删除失败: {e}")
+                QMessageBox.critical(self, "错误", str(e))

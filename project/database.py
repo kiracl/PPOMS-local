@@ -737,12 +737,13 @@ def _migrate_schema(conn: sqlite3.Connection):
         )
     """
     )
-    # Check for invoice_id (migration)
-    cur.execute("PRAGMA table_info(inbound_orders)")
-    cols = [r[1] for r in cur.fetchall()]
-    if "invoice_id" not in cols:
-        cur.execute("ALTER TABLE inbound_orders ADD COLUMN invoice_id INTEGER")
-    conn.commit()
+        cur.execute("PRAGMA table_info(inbound_orders)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "invoice_id" not in cols:
+            cur.execute("ALTER TABLE inbound_orders ADD COLUMN invoice_id INTEGER")
+        if "status" not in cols:
+            cur.execute("ALTER TABLE inbound_orders ADD COLUMN status TEXT DEFAULT '已入库'")
+        conn.commit()
 
     cur.execute(
         """
@@ -2290,6 +2291,13 @@ def delete_inbound_order(inbound_id):
     conn = _connect()
     try:
         cur = conn.cursor()
+        
+        # Check status before deleting
+        cur.execute("SELECT status FROM inbound_orders WHERE id=?", (inbound_id,))
+        row = cur.fetchone()
+        if row and row[0] != '已入库':
+            raise ValueError(f"当前入库单状态为【{row[0]}】，关联了对账或结算数据，无法删除")
+            
         # Get contract_order_id first
         cur.execute("SELECT contract_order_id FROM inbound_orders WHERE id=?", (inbound_id,))
         row = cur.fetchone()
@@ -2443,7 +2451,7 @@ def fetch_inbound_orders_extended(filter_text=None):
             SELECT 
                 io.id, io.inbound_no, io.inbound_date, io.contract_no, io.order_no, io.purch_plan_no, 
                 io.spec_model, io.order_qty, io.inbound_qty, io.warehouse_no, io.remarks,
-                co.unit_price, io.operator
+                co.unit_price, io.operator, io.status
             FROM inbound_orders io
             LEFT JOIN contract_orders co ON io.contract_order_id = co.id
             WHERE 1=1
@@ -4063,6 +4071,12 @@ def delete_invoice(invoice_id: int):
     conn = _connect()
     try:
         cur = conn.cursor()
+        
+        # Check if in reconciliation
+        cur.execute("SELECT 1 FROM reconciliation_details rd JOIN invoice_items ii ON rd.invoice_item_id = ii.id WHERE ii.invoice_id=?", (invoice_id,))
+        if cur.fetchone():
+            raise ValueError("发票已关联对账单或结算数据，无法删除")
+            
         # Unlink inbound orders first
         cur.execute("UPDATE inbound_orders SET invoice_id=NULL WHERE invoice_id=?", (invoice_id,))
         
@@ -4361,6 +4375,25 @@ def save_reconciliation(data: dict):
                 )
             )
             rec_id = cur.lastrowid
+            
+        status = data.get('status', '待对账')
+        new_inbound_status = None
+        if status == '待对账':
+            new_inbound_status = '对账中'
+        elif status == '已对账':
+            new_inbound_status = '已对账'
+        elif status == '结算中':
+            new_inbound_status = '结算中'
+        elif status == '已结算':
+            new_inbound_status = '已结算'
+            
+        if new_inbound_status:
+            cur.execute("SELECT inbound_order_id FROM reconciliation_details WHERE reconciliation_id=?", (rec_id,))
+            inbound_ids = [r[0] for r in cur.fetchall() if r[0]]
+            if inbound_ids:
+                placeholders = ",".join(["?"] * len(inbound_ids))
+                cur.execute(f"UPDATE inbound_orders SET status=? WHERE id IN ({placeholders})", [new_inbound_status] + inbound_ids)
+                
         conn.commit()
         return rec_id
     finally:
@@ -4370,7 +4403,40 @@ def delete_reconciliation(rec_id: int):
     conn = _connect()
     try:
         cur = conn.cursor()
+        
+        # Revert inbound status
+        cur.execute("SELECT inbound_order_id FROM reconciliation_details WHERE reconciliation_id=?", (rec_id,))
+        inbound_ids = [r[0] for r in cur.fetchall() if r[0]]
+        if inbound_ids:
+            placeholders = ",".join(["?"] * len(inbound_ids))
+            cur.execute(f"UPDATE inbound_orders SET status='已入库' WHERE id IN ({placeholders})", inbound_ids)
+            
+        cur.execute("DELETE FROM reconciliation_details WHERE reconciliation_id=?", (rec_id,))
         cur.execute("DELETE FROM reconciliations WHERE id=?", (rec_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def delete_reconciliation_invoice(rec_id: int, invoice_id: int):
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        
+        cur.execute("SELECT id FROM invoice_items WHERE invoice_id=?", (invoice_id,))
+        item_ids = [r[0] for r in cur.fetchall()]
+        if item_ids:
+            placeholders = ",".join(["?"] * len(item_ids))
+            
+            # Revert inbound status
+            cur.execute(f"SELECT inbound_order_id FROM reconciliation_details WHERE reconciliation_id=? AND invoice_item_id IN ({placeholders})", [rec_id] + item_ids)
+            inbound_ids = [r[0] for r in cur.fetchall() if r[0]]
+            if inbound_ids:
+                ib_placeholders = ",".join(["?"] * len(inbound_ids))
+                cur.execute(f"UPDATE inbound_orders SET status='已入库' WHERE id IN ({ib_placeholders})", inbound_ids)
+            
+            # Delete details
+            cur.execute(f"DELETE FROM reconciliation_details WHERE reconciliation_id=? AND invoice_item_id IN ({placeholders})", [rec_id] + item_ids)
+            
         conn.commit()
     finally:
         conn.close()
@@ -4500,6 +4566,7 @@ def create_reconciliation_details_batch(rec_id: int, items_data: list):
     conn = _connect()
     try:
         cur = conn.cursor()
+        inbound_ids = []
         for item in items_data:
             amt = item['amount']
             tax_rate = item.get('tax_rate', 0) or 0
@@ -4519,6 +4586,13 @@ def create_reconciliation_details_batch(rec_id: int, items_data: list):
                     item['quantity'], amt, amt_incl
                 )
             )
+            if item.get('inbound_order_id'):
+                inbound_ids.append(item['inbound_order_id'])
+                
+        if inbound_ids:
+            placeholders = ",".join(["?"] * len(inbound_ids))
+            cur.execute(f"UPDATE inbound_orders SET status='对账中' WHERE id IN ({placeholders})", inbound_ids)
+            
         conn.commit()
     finally:
         conn.close()

@@ -257,10 +257,10 @@ class InboundManagerWidget(QWidget):
         list_layout.addLayout(tool_box)
         
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(13)
+        self.history_table.setColumnCount(15)
         self.history_table.setHorizontalHeaderLabels([
             "选择", "ID", "入库单号", "入库日期", "合同编号", "订单编号", "采购计划", 
-            "规格型号", "本次入库", "单价", "总价", "仓储单号", "备注"
+            "规格型号", "本次入库", "单价", "总价", "仓储单号", "操作人", "状态", "备注"
         ])
         self.history_table.setColumnHidden(1, True) # ID Hidden
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -448,7 +448,7 @@ class InboundManagerWidget(QWidget):
         for r in rows:
             # 0:id, 1:inbound_no, 2:inbound_date, 3:contract_no, 4:order_no, 5:purch_plan_no, 
             # 6:spec_model, 7:order_qty, 8:inbound_qty, 9:warehouse_no, 10:remarks, 11:unit_price
-            # 12: operator
+            # 12: operator, 13: status
             
             row = self.history_table.rowCount()
             self.history_table.insertRow(row)
@@ -463,9 +463,6 @@ class InboundManagerWidget(QWidget):
             inbound_qty = r[8] if r[8] else 0.0
             total = inbound_qty * price
             
-            # Map to table:
-            # Checkbox, ID, No, Date, Contract, Order, Purch, Spec, InboundQty, Price, Total, WhNo, Rem
-            
             self.history_table.setItem(row, 1, QTableWidgetItem(str(r[0])))
             self.history_table.setItem(row, 2, QTableWidgetItem(str(r[1])))
             self.history_table.setItem(row, 3, QTableWidgetItem(str(r[2])))
@@ -479,7 +476,9 @@ class InboundManagerWidget(QWidget):
             self.history_table.setItem(row, 10, QTableWidgetItem(f"{total:,.2f}"))
             
             self.history_table.setItem(row, 11, QTableWidgetItem(str(r[9])))
-            self.history_table.setItem(row, 12, QTableWidgetItem(str(r[10])))
+            self.history_table.setItem(row, 12, QTableWidgetItem(str(r[12]) if len(r) > 12 else ""))
+            self.history_table.setItem(row, 13, QTableWidgetItem(str(r[13]) if len(r) > 13 else "已入库"))
+            self.history_table.setItem(row, 14, QTableWidgetItem(str(r[10])))
             
             # Store full data dict in ID column (col 1) for editing
             data = {
@@ -494,7 +493,8 @@ class InboundManagerWidget(QWidget):
                 'inbound_qty': r[8],
                 'warehouse_no': r[9],
                 'remarks': r[10],
-                'operator': r[12] if len(r) > 12 else ''
+                'operator': r[12] if len(r) > 12 else '',
+                'status': r[13] if len(r) > 13 else '已入库'
             }
             self.history_table.item(row, 1).setData(Qt.UserRole, data)
 
@@ -672,7 +672,7 @@ class InboundManagerWidget(QWidget):
                 database.delete_inbound_order(data['id'])
                 self.load_history()
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"删除失败: {e}")
+                QMessageBox.critical(self, "错误", str(e))
 
 class EditInboundDialog(QDialog):
     def __init__(self, data, parent=None):

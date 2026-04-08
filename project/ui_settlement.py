@@ -708,7 +708,7 @@ class ReconciliationEditor(QWidget):
                 'total_amount': 0,
                 'remarks': ''
             }
-            database.upsert_reconciliation(data)
+            database.save_reconciliation(data)
             self.back_signal.emit()
             
     def export_details(self):
@@ -726,7 +726,7 @@ class ReconciliationEditor(QWidget):
                 'total_amount': 0,
                 'remarks': ''
             }
-            database.upsert_reconciliation(data)
+            database.save_reconciliation(data)
             self.back_signal.emit()
 
 class InvoiceSelectionDialog(QDialog):

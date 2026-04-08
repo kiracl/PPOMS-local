@@ -393,23 +393,23 @@ class ReconciliationEditor(QWidget):
         self.layout.addWidget(form_group)
         
         # Splitter for Dual Pane
-        splitter = QSplitter(Qt.Vertical)
+        splitter = QSplitter(Qt.Horizontal)
         
-        # Top Pane: Invoices
-        top_widget = QWidget()
-        top_layout = QVBoxLayout(top_widget)
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        # Left Pane: Invoices
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
-        h_top = QHBoxLayout()
-        h_top.addWidget(QLabel("<b>待核销发票池 (左/上)</b>"))
-        h_top.addStretch()
+        h_left = QHBoxLayout()
+        h_left.addWidget(QLabel("<b>待核销发票池 (左)</b>"))
+        h_left.addStretch()
         self.btn_add_invoice = QPushButton("关联发票")
         self.btn_add_invoice.clicked.connect(self.add_invoice)
         self.btn_remove_invoice = QPushButton("移除发票(暂未实现)")
         self.btn_remove_invoice.clicked.connect(self.remove_invoice)
-        h_top.addWidget(self.btn_add_invoice)
-        h_top.addWidget(self.btn_remove_invoice)
-        top_layout.addLayout(h_top)
+        h_left.addWidget(self.btn_add_invoice)
+        h_left.addWidget(self.btn_remove_invoice)
+        left_layout.addLayout(h_left)
         
         self.table_invoices = QTableWidget()
         self.table_invoices.setColumnCount(8)
@@ -419,18 +419,18 @@ class ReconciliationEditor(QWidget):
         self.table_invoices.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table_invoices.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_invoices.horizontalHeader().setStretchLastSection(True)
-        top_layout.addWidget(self.table_invoices)
-        splitter.addWidget(top_widget)
+        left_layout.addWidget(self.table_invoices)
+        splitter.addWidget(left_widget)
         
-        # Middle actions
+        # Middle actions (Vertical)
         mid_widget = QWidget()
-        mid_layout = QHBoxLayout(mid_widget)
-        mid_layout.setContentsMargins(0, 5, 0, 5)
+        mid_layout = QVBoxLayout(mid_widget)
+        mid_layout.setContentsMargins(5, 0, 5, 0)
         self.btn_auto_match = QPushButton("一键自动匹配")
         self.btn_auto_match.clicked.connect(self.auto_match)
-        self.btn_manual_match = QPushButton("↓ 手动连线绑定")
+        self.btn_manual_match = QPushButton("→ 手动连线绑定")
         self.btn_manual_match.clicked.connect(self.manual_match)
-        self.btn_unbind = QPushButton("↑ 解除绑定")
+        self.btn_unbind = QPushButton("← 解除绑定")
         self.btn_unbind.clicked.connect(self.unbind_match)
         mid_layout.addStretch()
         mid_layout.addWidget(self.btn_auto_match)
@@ -439,11 +439,11 @@ class ReconciliationEditor(QWidget):
         mid_layout.addStretch()
         splitter.addWidget(mid_widget)
         
-        # Bottom Pane: Inbounds
-        bot_widget = QWidget()
-        bot_layout = QVBoxLayout(bot_widget)
-        bot_layout.setContentsMargins(0, 0, 0, 0)
-        bot_layout.addWidget(QLabel("<b>待对账入库池 (右/下)</b>"))
+        # Right Pane: Inbounds
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(QLabel("<b>待对账入库池 (右)</b>"))
         
         self.table_inbounds = QTableWidget()
         self.table_inbounds.setColumnCount(8)
@@ -453,8 +453,11 @@ class ReconciliationEditor(QWidget):
         self.table_inbounds.setSelectionMode(QAbstractItemView.MultiSelection)
         self.table_inbounds.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_inbounds.horizontalHeader().setStretchLastSection(True)
-        bot_layout.addWidget(self.table_inbounds)
-        splitter.addWidget(bot_widget)
+        right_layout.addWidget(self.table_inbounds)
+        splitter.addWidget(right_widget)
+        
+        # Adjust Splitter Sizes (e.g., 45%, 10%, 45%)
+        splitter.setSizes([450, 100, 450])
         
         self.layout.addWidget(splitter)
         
